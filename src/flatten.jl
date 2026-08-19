@@ -1,0 +1,207 @@
+@doc raw"""
+    flatten(ps)
+    flatten(T, ps)
+
+Copy every number of `ps` into one flat `Vector`, and return it together with the
+[`ParameterLayout`](@ref) needed to put it back.
+
+Without `T` the element type is [`parameter_eltype`](@ref)`(ps)`, i.e. the parameters' own — a
+`Float32` network flattens to a `Vector{Float32}`.
+
+# Examples
+
+```jldoctest
+using NeuralNetworkParameters
+
+ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]),))
+v, layout = flatten(ps)
+v
+
+# output
+
+3-element Vector{Float64}:
+ 1.0
+ 2.0
+ 3.0
+```
+
+[`unflatten`](@ref) is its inverse:
+
+```jldoctest
+using NeuralNetworkParameters
+
+ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]),))
+v, layout = flatten(ps)
+unflatten(layout, v) == ps
+
+# output
+
+true
+```
+
+# Implementation
+
+The copy is a `copyto!` per leaf over a known range, so it runs at memory bandwidth and works
+unchanged for GPU arrays — no element is ever indexed individually.
+
+Copying rather than viewing is deliberate. A flat vector of views could not carry a different element
+type from the parameters, and that is exactly what differentiating through the flat form needs: the
+`unflatten` on the forward pass of `ForwardDiff` has to produce `Dual`-valued parameters over a
+`Dual`-valued vector. See [`flatten!`](@ref) for the allocation-free form used in inner loops.
+"""
+flatten(ps) = flatten(parameter_eltype(ps), ps)
+
+function flatten(::Type{T}, ps) where {T}
+    layout = parameterlayout(ps)
+    v = Vector{T}(undef, length(layout))
+    flatten!(v, ps, layout)
+    v, layout
+end
+
+"""
+    flatten!(v, ps, [layout])
+
+Write the numbers of `ps` into the existing vector `v`, and return `v`.
+
+Allocation-free when the `layout` is supplied, which is the point: an optimizer that flattens its
+parameters once per step, or twice per inner product, should not allocate a fresh vector each time.
+
+```julia
+v, layout = flatten(ps)          # once
+flatten!(v, ps, layout)          # per iteration, zero allocations
+```
+"""
+flatten!(v::AbstractVector, ps) = flatten!(v, ps, parameterlayout(ps))
+
+function flatten!(v::AbstractVector, ps, layout::ParameterLayout)
+    length(v) == length(layout) ||
+        throw(DimensionMismatch(string(
+            "flat vector has length ", length(v), ", layout needs ",
+            length(layout))))
+    _flatten!(v, ps, layout)
+    v
+end
+
+@inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
+@inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _flatten_children!(v, values(ps), values(l.children))
+@inline _flatten!(v, ps::Tuple, l::TupleLayout) = _flatten_children!(v, ps, l.children)
+@inline _flatten!(v, x, l::WrappedLayout) = _flatten!(v, freeparameters(x), l.inner)
+
+@inline function _flatten!(v, x, l::LeafLayout)
+    _copy_out!(v, first(l.range), x, length(l.range))
+    nothing
+end
+
+@inline _flatten_children!(v, ::Tuple{}, ::Tuple{}) = nothing
+@inline function _flatten_children!(v, xs::Tuple, ls::Tuple)
+    _flatten!(v, first(xs), first(ls))
+    _flatten_children!(v, Base.tail(xs), Base.tail(ls))
+end
+
+@inline _copy_out!(v, doffs::Int, x::AbstractArray, n::Int) = (
+    copyto!(v, doffs, x, firstindex(x), n); nothing)
+@inline _copy_out!(v, doffs::Int, x::Number, ::Int) = (v[doffs] = x; nothing)
+
+@doc raw"""
+    unflatten(layout, v)
+
+Rebuild the parameter set that `layout` describes from the flat vector `v`.
+
+`v` may have a different element type from the parameters the layout was built from — that is what
+makes the flat form usable for derivatives:
+
+```julia
+g = ForwardDiff.gradient(w -> loss(unflatten(layout, w)), v)
+unflatten(layout, g)     # the gradient, in the shape of the parameters
+```
+
+# Examples
+
+```jldoctest
+using NeuralNetworkParameters
+
+ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]),))
+v, layout = flatten(ps)
+unflatten(layout, [10.0, 20.0, 30.0]).L1.W
+
+# output
+
+1×2 Matrix{Float64}:
+ 10.0  20.0
+```
+
+# Implementation
+
+Each leaf is *copied* out of `v` rather than viewed into it, so the leaves are ordinary arrays and
+cannot alias each other or the flat vector.
+"""
+unflatten(l::ParametersLayout, v::AbstractVector) = NetworkParameters(unflatten(l.inner, v))
+function unflatten(l::NestedLayout, v::AbstractVector)
+    NamedTuple{keys(l.children)}(map(c -> unflatten(c, v), values(l.children)))
+end
+unflatten(l::TupleLayout, v::AbstractVector) = map(c -> unflatten(c, v), l.children)
+unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
+unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
+
+_reshape_leaf(data::AbstractVector, ::Tuple{}) = data[begin]
+_reshape_leaf(data::AbstractVector, size::Tuple) = reshape(data, size...)
+
+@doc raw"""
+    unflatten(layout, J::AbstractMatrix)
+
+Split the rows of `J` into the shape of the parameter set — for a Jacobian taken with respect to the
+flat vector, so that the block belonging to each parameter can be read off.
+
+Each leaf becomes the ``n_\mathrm{leaf} \times \mathrm{size}(J, 2)`` row block it occupies. The leaves
+are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing to rebuild it into.
+"""
+unflatten(l::ParametersLayout, J::AbstractMatrix) = NetworkParameters(unflatten(l.inner, J))
+function unflatten(l::NestedLayout, J::AbstractMatrix)
+    NamedTuple{keys(l.children)}(map(c -> unflatten(c, J), values(l.children)))
+end
+unflatten(l::TupleLayout, J::AbstractMatrix) = map(c -> unflatten(c, J), l.children)
+unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
+unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
+
+"""
+    unflatten!(ps, layout, v)
+
+Write the numbers of `v` into the leaves of the existing `ps`, and return `ps`.
+
+Allocation-free, and the counterpart of [`flatten!`](@ref). The write goes through
+[`freeparameters`](@ref), so only the storage of a structured leaf is touched — a `SymmetricMatrix`
+has its `n(n+1)/2` numbers replaced and stays symmetric.
+
+Requires mutable leaves; a parameter set with a scalar leaf has to use the out-of-place
+[`unflatten`](@ref).
+"""
+function unflatten!(ps, layout::ParameterLayout, v::AbstractVector)
+    length(v) == length(layout) ||
+        throw(DimensionMismatch(string(
+            "flat vector has length ", length(v), ", layout needs ",
+            length(layout))))
+    _unflatten!(ps, layout, v)
+    ps
+end
+
+@inline _unflatten!(ps::NetworkParameters, l::ParametersLayout, v) = _unflatten!(params(ps), l.inner, v)
+@inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unflatten_children!(
+    values(ps), values(l.children), v)
+@inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unflatten_children!(ps, l.children, v)
+@inline _unflatten!(x, l::WrappedLayout, v) = _unflatten!(freeparameters(x), l.inner, v)
+
+@inline function _unflatten!(x::AbstractArray, l::LeafLayout, v)
+    copyto!(x, firstindex(x), v, first(l.range), length(l.range))
+    nothing
+end
+
+function _unflatten!(x::Number, ::LeafLayout, _)
+    throw(ArgumentError(string("cannot write into the immutable leaf `", x,
+        "`; use the out-of-place `unflatten` for a parameter set with scalar leaves")))
+end
+
+@inline _unflatten_children!(::Tuple{}, ::Tuple{}, v) = nothing
+@inline function _unflatten_children!(xs::Tuple, ls::Tuple, v)
+    _unflatten!(first(xs), first(ls), v)
+    _unflatten_children!(Base.tail(xs), Base.tail(ls), v)
+end

@@ -1,3 +1,11 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 NeuralNetworkParameters = "67f4d93a-60e9-472b-8cdd-1ccf6005724a"
+
+[sources]
+NeuralNetworkParameters = {path = ".."}
+
+[compat]
+Documenter = "1"
