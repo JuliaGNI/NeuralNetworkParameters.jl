@@ -107,6 +107,14 @@ D1 and D2 are fixed. The rest are noted so they are not lost; the phase column s
 | D6 | `ParameterHandling.flatten` defaults to `Float64`, silently promoting `Float32` networks | `GO/…/named_tuple_wrapper.jl:12-14` | **1 by design**; 3 |
 | D7 | With the type moved out of ANN, `ZygoteRules.pullback(f::Function, ::NeuralNetworkParameters)` owns neither argument type and becomes piracy there | `ANN/src/pullback_for_applychain.jl:10-17` | **1 provides the new home**; 2 |
 | D8 | Introduced by the separation: GML's `h5save(::H5DataStore, ::StiefelManifold, ::AbstractString)` and `changebackend(::NeuralNetworkBackend, ::StiefelManifold)` are now genuine type piracy — the generics are ANN's and the types are GO's, so GML owns nothing in either signature | `GML/ext/HDF5Ext.jl:17-50, 59-77` | 3 |
+| D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207), which needed it to write a nested parameter set to HDF5 | `GML/src/layers/forcing_dissipation_layers.jl` | **1 provides the home**; 2 |
+| D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. ANN's own extension has `h5save(::H5DataStore, ::NamedTuple, …)` and `save(::H5DataStore, ::NeuralNetworkParameters)`, but nothing for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | `GML/ext/HDF5Ext.jl` | 2 |
+
+D9 is one line of Phase 1 work that is not there yet: `src/parameters.jl` forwards `keys`, `values`,
+`getindex` and `pairs`, and has `params`, but no `Base.NamedTuple(p::NetworkParameters) = params(p)`.
+Adding it makes the conversion something this package owns, and Phase 2 makes it reachable from the
+`NeuralNetworkParameters` alias. D10 is the same shape one level up: with `src/io.jl` owning the
+generic HDF5 path, a nested parameter set serialises without anybody committing piracy.
 
 D8 is the sharpest argument for the protocol. With the structured types upstream of the package that
 trains with them, a *generic* HDF5 path driven by `freeparameters`/`rebuild` is the only way to
@@ -245,6 +253,16 @@ calls, deleting the pirating `h5save`/`changebackend` methods (D8) and `_natural
 `changebackend` out of the HDF5 extension (D3); rewrite `src/map_to_cpu.jl` as one `mapparameters` call;
 replace `_eltype` and `apply_toNT` (`src/utils.jl`). The wrapper-type methods belong in GO now, not GML,
 since GO owns the types.
+
+**Registration is now on the critical path.** GML
+[#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) — parametric generalized
+Hamiltonian neural networks — is the first consumer of `flatten`/`unflatten` outside
+`GeometricOptimizers`. It flattens the parameters of the *system* into the network input, and reached
+for `ParameterHandling` first; that fails, because GO's pirated `flatten(x)`
+(`GO/…/named_tuple_wrapper.jl:14`) has an unbound type parameter and is the method that wins — D6 and
+§7.1, hit in practice. GML depends on this package instead, so it cannot merge until this package is
+in the General registry: GML supports `julia = "1.10"`, where `[sources]` in `Project.toml` does not
+exist.
 
 **`SymbolicNeuralNetworks` 0.5.0** needs no change. Its `flatten_equations`/`unflatten`
 (`src/codegen/equation_sets.jl`) solves a different problem — flattening symbolic equation sets and
