@@ -82,15 +82,23 @@ end
     @test flatten!(similar(v), ps) == v
 end
 
+# Measured from inside a function, which is the claim that matters: `flatten!` allocates nothing when
+# called from compiled code, such as an optimizer inner loop. Measuring at the top level of a testset
+# instead reports a few tens of bytes on Julia 1.10 — the recursion is not specialised in an uninferred
+# top-level context, and the figure tracks the number of leaves rather than anything about the leaves
+# themselves, appearing for plain arrays just as for structured ones.
+_flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
+_unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
+
 @testset "the in-place forms do not allocate" begin
     ps = sample_parameters()
     v, layout = flatten(ps)
     buf = similar(v)
     dest = unflatten(layout, zero(v))
-    flatten!(buf, ps, layout)              # warm up
-    unflatten!(dest, layout, v)
-    @test (@allocated flatten!(buf, ps, layout)) == 0
-    @test (@allocated unflatten!(dest, layout, v)) == 0
+    _flatten_allocs(buf, ps, layout)          # warm up the call and the measurement
+    _unflatten_allocs(dest, layout, v)
+    @test _flatten_allocs(buf, ps, layout) == 0
+    @test _unflatten_allocs(dest, layout, v) == 0
 end
 
 @testset "length mismatches are caught" begin

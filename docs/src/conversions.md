@@ -92,8 +92,10 @@ type* from the ones the layout was built from, which is exactly what forward-mod
 needs. A `Float64` buffer cannot be shared with a `Dual`-valued view.
 
 Where repeated conversion does matter is an inner loop — an optimizer flattening twice per inner
-product. That is what [`flatten!`](@ref) and [`unflatten!`](@ref) are for: given a layout and a
-buffer, both are allocation-free.
+product. That is what [`flatten!`](@ref) and [`unflatten!`](@ref) are for: given a layout and a buffer,
+both allocate nothing when called from compiled code. (From an uninferred context, such as the top level
+of a script, the recursion is not specialised and costs a few tens of bytes per leaf on Julia 1.10 —
+which is what the package's own allocation tests measure inside a function to avoid.)
 
 ```jldoctest
 using NeuralNetworkParameters

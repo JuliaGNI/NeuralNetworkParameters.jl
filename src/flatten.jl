@@ -63,8 +63,10 @@ end
 
 Write the numbers of `ps` into the existing vector `v`, and return `v`.
 
-Allocation-free when the `layout` is supplied, which is the point: an optimizer that flattens its
-parameters once per step, or twice per inner product, should not allocate a fresh vector each time.
+Allocation-free when the `layout` is supplied and the call is made from compiled code, which is the
+point: an optimizer that flattens its parameters once per step, or twice per inner product, should not
+allocate a fresh vector each time. (Called from an uninferred context — the top level of a script, say —
+the recursion is not specialised and costs a few tens of bytes per leaf on Julia 1.10.)
 
 ```julia
 v, layout = flatten(ps)          # once
@@ -168,7 +170,7 @@ unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
 
 Write the numbers of `v` into the leaves of the existing `ps`, and return `ps`.
 
-Allocation-free, and the counterpart of [`flatten!`](@ref). The write goes through
+Allocation-free on the same terms as [`flatten!`](@ref), whose counterpart it is. The write goes through
 [`freeparameters`](@ref), so only the storage of a structured leaf is touched — a `SymmetricMatrix`
 has its `n(n+1)/2` numbers replaced and stays symmetric.
 

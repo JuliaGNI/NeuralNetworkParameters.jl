@@ -185,7 +185,8 @@ julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl
 ```
 
 The suite covers, beyond round trips: `Float32` fidelity (D6); zero allocation for `flatten!` and
-`unflatten!`; a structured leaf and a two-block leaf whose types survive the round trip (D5); scalar,
+`unflatten!` — measured from inside a function, since a top-level `@allocated` reports a few tens of
+bytes per leaf on Julia 1.10, where the recursion is not specialised; a structured leaf and a two-block leaf whose types survive the round trip (D5); scalar,
 empty and tuple leaves; `Dual`-valued unflattening; agreement between `ForwardDiff` on the flat form and
 `Zygote` on the structured one; Zygote through both conversions; a structurally-zero gradient block; the
 `nothing`-branch skip in the walks; ten-layer HDF5 key ordering (D4); both HDF5 load paths; and files in
