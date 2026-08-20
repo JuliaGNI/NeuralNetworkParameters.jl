@@ -12,7 +12,10 @@ params
 ```
 
 `NetworkParameters` wraps a `NamedTuple` and forwards `getproperty`, `getindex`, `keys`, `values`,
-`length`, `iterate` and `pairs` to it, so it reads like the `NamedTuple` it holds.
+`length`, `iterate` and `pairs` to it, so it reads like the `NamedTuple` it holds. `NamedTuple(ps)`
+unwraps it again, and is the same thing as [`params`](@ref); the conversion is defined here rather
+than downstream because a package that owns neither `Base.NamedTuple` nor the type cannot define it
+without committing piracy on both counts.
 
 The wrapper is not decoration. A bare `NamedTuple` belongs to `Base`, so any package wanting to give a
 parameter set its own behaviour — saving it, flattening it, stepping an optimizer over it — must write
