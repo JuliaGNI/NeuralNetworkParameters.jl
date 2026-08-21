@@ -8,29 +8,11 @@
 
 The parameters of a neural network, in two shapes, with conversions between them.
 
-`NeuralNetworkParameters` serves the networks defined in
+`NeuralNetworkParameters` holds the parameters of the networks defined in
 [`AbstractNeuralNetworks`](https://github.com/JuliaGNI/AbstractNeuralNetworks.jl),
 [`GeometricMachineLearning`](https://github.com/JuliaGNI/GeometricMachineLearning.jl) and
-[`SymbolicNeuralNetworks`](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl), and holds nothing
-but the parameters: it depends on none of them, and adds one dependency of its own (`ChainRulesCore`).
+[`SymbolicNeuralNetworks`](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl).
 
-It exists for two reasons. The first is that a parameter set needs to be a type somebody *owns*. A
-bare `NamedTuple` belongs to `Base`, so a package that wants to give the parameter set its own
-behaviour — writing it to a file, flattening it, stepping an optimizer over it — has to write methods
-on a signature in which it owns nothing. Every such method is type piracy, and two packages doing it
-can silently disagree.
-
-The second is that the traversal which goes with the container was being written once per package.
-Recurse into the `NamedTuple`s, do something at each leaf, put the result back in the same shape: that
-is `flatten`/`unflatten`, `h5save`/`h5load`, `changebackend`, `map_to_cpu` and the elementwise
-optimizer primitives, each re-declaring a method per structured parameter type. Written once against
-the leaf protocol below, one implementation covers all of them and needs to know none of the types.
-
-A note on the name: the package is `NeuralNetworkParameters`, the type it exports is
-`NetworkParameters`. A package cannot export a type sharing its own name — the module binding wins at
-the `using` site, so `NeuralNetworkParameters(nt)` would try to call a `Module`.
-Meanwhile `AbstractNeuralNetworks` keeps a `const NeuralNetworkParameters = NetworkParameters` alias for
-compatibility.
 
 ## Installation
 
@@ -45,8 +27,6 @@ Pkg.add("NeuralNetworkParameters")
 entry at a local checkout.
 
 ## Quickstart
-
-### The two shapes
 
 `NetworkParameters` follows the architecture — a `NamedTuple` of `NamedTuple`s of arrays, one entry
 per layer:
