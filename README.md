@@ -6,13 +6,10 @@
 [![Coverage](https://codecov.io/gh/JuliaGNI/NeuralNetworkParameters.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaGNI/NeuralNetworkParameters.jl)
 [![PkgEval](https://JuliaCI.github.io/NanosoldierReports/pkgeval_badges/N/NeuralNetworkParameters.svg)](https://JuliaCI.github.io/NanosoldierReports/pkgeval_badges/N/NeuralNetworkParameters.html)
 
-The parameters of a neural network, in two shapes, with conversions between them.
-
 `NeuralNetworkParameters` holds the parameters of the networks defined in
 [`AbstractNeuralNetworks`](https://github.com/JuliaGNI/AbstractNeuralNetworks.jl),
 [`GeometricMachineLearning`](https://github.com/JuliaGNI/GeometricMachineLearning.jl) and
-[`SymbolicNeuralNetworks`](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl).
-
+[`SymbolicNeuralNetworks`](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl), in two shapes, with conversions between them.
 
 ## Installation
 
