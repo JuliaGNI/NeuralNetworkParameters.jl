@@ -35,6 +35,13 @@ end
           NetworkParameters((b = [2.0], a = [1.0]))
 end
 
+@testset "conversion to a NamedTuple" begin
+    @test NamedTuple(ps) === nt
+    @test NamedTuple(ps) === params(ps)
+    # the round trip both ways, since this is what a downstream serialiser uses
+    @test NetworkParameters(NamedTuple(ps)) == ps
+end
+
 @testset "iteration" begin
     @test collect(ps) == collect(nt)
 end
