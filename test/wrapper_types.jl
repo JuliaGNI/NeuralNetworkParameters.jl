@@ -3,7 +3,8 @@
 #
 # `Sym` mirrors `SymmetricMatrix`: n(n+1)/2 numbers behind an n×n interface, and an `n` that is *not*
 # part of the differentiable storage. `TwoBlock` mirrors `StiefelLieAlgHorMatrix`: freedom in two
-# blocks, one of them structured itself.
+# blocks, one of them structured itself. `Manifold` mirrors `StiefelManifold`: the storage is the whole
+# matrix and there is nothing else to carry, so it has no metadata.
 
 import NeuralNetworkParameters as NNP
 
@@ -38,9 +39,23 @@ NNP.freeparameters(g::TwoBlock) = (A = g.A, B = g.B)
 NNP.rebuild(g::TwoBlock, data) = TwoBlock(data.A, data.B, g.N)
 NNP.parameter_metadata(g::TwoBlock) = (N = g.N,)
 
+struct Manifold{T, AT <: AbstractMatrix{T}} <: AbstractMatrix{T}
+    A::AT
+end
+
+Base.size(Y::Manifold) = size(Y.A)
+Base.getindex(Y::Manifold, i::Int, j::Int) = Y.A[i, j]
+
+NNP.freeparameters(Y::Manifold) = Y.A
+NNP.rebuild(::Manifold, data) = Manifold(data)
+# and no `parameter_metadata`: the default, an empty `NamedTuple`, is the whole truth about this one
+
 "A three-number symmetric matrix and the five-number two-block lift built on it."
 sample_sym() = Sym([1.0, 2.0, 3.0], 2)
 sample_twoblock() = TwoBlock(Sym([4.0, 5.0, 6.0], 2), [7.0 8.0], 3)
+
+"A four-number matrix that is its own storage."
+sample_manifold() = Manifold([1.0 2.0; 3.0 4.0])
 
 "A parameter set with an ordinary layer, a structured leaf and a multi-block leaf: 3 + 3 + 5 numbers."
 function sample_parameters()

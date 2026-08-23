@@ -7,6 +7,9 @@ include("wrapper_types.jl")
 
 register_parameter_type!("Sym", (S, md) -> Sym(S, md.n))
 register_parameter_type!("TwoBlock", (data, md) -> TwoBlock(data.A, data.B, md.N))
+# `Manifold` has no metadata to take, and the `NamedTuple` arm is for the layout
+# `GeometricMachineLearning` wrote — `GeometricOptimizers` registers its manifolds exactly so
+register_parameter_type!("Manifold", (S, md) -> Manifold(S isa NamedTuple ? S.A : S))
 
 tmp() = tempname() * ".h5"
 
@@ -73,6 +76,25 @@ end
     finally
         merge!(PARAMETER_TYPE_REGISTRY, saved)
     end
+end
+
+@testset "a structured leaf with nothing to record" begin
+    # `freeparameters` is the whole matrix and there is no `parameter_metadata` method, so the writer
+    # has no metadata group to write and the reader has none to find. Both halves have to agree about
+    # that: the file carries `storage` alone, and the reconstructor is handed an empty `NamedTuple`.
+    ps = NetworkParameters((L1 = (Y = sample_manifold(),),))
+    f = tmp()
+    save(f, ps)
+    h5open(f, "r") do h5
+        @test haskey(h5["L1"]["Y"], "storage")
+        @test !haskey(h5["L1"]["Y"], "metadata")
+    end
+
+    back = load(NetworkParameters, f)
+    @test back.L1.Y isa Manifold
+    @test back.L1.Y == sample_manifold()
+    # and against a prototype, which wants nothing from metadata either
+    @test load(NetworkParameters, f, ps).L1.Y == sample_manifold()
 end
 
 @testset "scalar, empty and tuple leaves" begin
@@ -147,9 +169,18 @@ end
         storage isa NamedTuple ? Sym(storage.S, storage.n) : Sym(storage, metadata.n)
     end
 
+    # the same for a type with nothing to record, which GML wrote as the one field `A`: the group's
+    # single member is the whole storage, so normalising it means reaching for `storage.A`
+    seen_manifold = Ref{Any}(nothing)
+    function reconstruct_manifold(storage, metadata)
+        seen_manifold[] = (storage, metadata)
+        Manifold(storage isa NamedTuple ? storage.A : storage)
+    end
+
     saved = copy(PARAMETER_TYPE_REGISTRY)
     try
         register_parameter_type!("Sym", reconstruct)
+        register_parameter_type!("Manifold", reconstruct_manifold)
 
         f = tmp()
         h5open(f, "w") do h5
@@ -158,12 +189,17 @@ end
             HDF5.attributes(gW)["gml_type"] = "Sym"
             gW["S"] = [1.0, 2.0, 3.0]
             gW["n"] = 2
+            gY = HDF5.create_group(g, "Y")
+            HDF5.attributes(gY)["gml_type"] = "Manifold"
+            gY["A"] = [1.0 2.0; 3.0 4.0]
             g["b"] = [4.0]
         end
 
         back = load(NetworkParameters, f)
         @test back.L1.W isa Sym
         @test back.L1.W == sample_sym()
+        @test back.L1.Y isa Manifold
+        @test back.L1.Y == sample_manifold()
         @test back.L1.b == [4.0]
 
         # what the reconstructor was handed: the group's fields, the same object in both positions
@@ -175,14 +211,26 @@ end
         # `storage.S` rather than `storage[1]`.
         @test issetequal(keys(storage), (:S, :n))
 
+        # a group with one member is no different: the field arrives wrapped, in both positions, and
+        # the payload is `storage.A` rather than `storage` itself
+        storage, metadata = seen_manifold[]
+        @test keys(storage) == (:A,)
+        @test metadata === storage
+
         # the same registration against a file this package wrote: storage is what `freeparameters`
         # produced, metadata what `parameter_metadata` did, and the two are distinct
         f2 = tmp()
-        save(f2, NetworkParameters((L1 = (W = sample_sym(),),)))
-        @test load(NetworkParameters, f2).L1.W == sample_sym()
+        save(f2, NetworkParameters((L1 = (W = sample_sym(), Y = sample_manifold()),)))
+        back2 = load(NetworkParameters, f2)
+        @test back2.L1.W == sample_sym()
+        @test back2.L1.Y == sample_manifold()
         storage, metadata = seen[]
         @test storage == sample_sym().S
         @test metadata == (n = 2,)
+        # the one with nothing to record gets its storage bare and an empty `NamedTuple` beside it
+        storage, metadata = seen_manifold[]
+        @test storage == sample_manifold().A
+        @test metadata == NamedTuple()
 
         # a prototype is no substitute for the registry here: the group holds no storage to rebuild
         # from, and the error says so rather than raising a `KeyError` from inside the reader

@@ -43,8 +43,9 @@ nothing better available.
 ## Structured parameters
 
 A structured leaf is written as a group holding its [`freeparameters`](@ref) and its
-[`parameter_metadata`](@ref). Reading it back needs to know how to reconstruct the type, and there are
-two ways to supply that.
+[`parameter_metadata`](@ref) — the latter only when there is any, so a type that keeps everything in
+its storage, as a manifold element does, writes the storage alone. Reading it back needs to know how
+to reconstruct the type, and there are two ways to supply that.
 
 **Against a prototype.** Pass a parameter set of the right shape and the leaves are rebuilt with
 [`rebuild`](@ref), exactly as unflattening does. Nothing needs registering. Where the architecture is
