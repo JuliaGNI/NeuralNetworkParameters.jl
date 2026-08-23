@@ -130,3 +130,56 @@ end
     end
     @test keys(load(NetworkParameters, f2)) == Tuple(Symbol("L$i") for i in 1:10)
 end
+
+@testset "and the ones GeometricMachineLearning tagged" begin
+    # The other branch of the legacy reader: a group carrying a `gml_type` attribute, with the type's
+    # fields under their own names. Such a file records no storage/metadata split, so there is nothing
+    # here that could tell one from the other — the group's fields go to the reconstructor in *both*
+    # positions, and normalising them is the job of the package that owns the type.
+    # `GeometricOptimizers` is written against exactly that; this is what pins it.
+    seen = Ref{Any}(nothing)
+    register_parameter_type!("GmlSym", function (storage, metadata)
+        seen[] = (storage, metadata)
+        storage isa NamedTuple ? Sym(storage.S, storage.n) : Sym(storage, metadata.n)
+    end)
+
+    f = tmp()
+    h5open(f, "w") do h5
+        g = HDF5.create_group(h5, "L1")
+        gW = HDF5.create_group(g, "W")
+        HDF5.attributes(gW)["gml_type"] = "GmlSym"
+        gW["S"] = [1.0, 2.0, 3.0]
+        gW["n"] = 2
+        g["b"] = [4.0]
+    end
+
+    back = load(NetworkParameters, f)
+    @test back.L1.W isa Sym
+    @test back.L1.W == sample_sym()
+    @test back.L1.b == [4.0]
+
+    # what the reconstructor was handed: the group's fields, the same object in both positions
+    storage, metadata = seen[]
+    @test storage isa NamedTuple
+    @test metadata === storage
+    # and by name only. A file in this layout records no key order, so the order these come back in is
+    # whatever HDF5 gives for the group — which is why a reconstructor for it has to reach for
+    # `storage.S` rather than `storage[1]`.
+    @test issetequal(keys(storage), (:S, :n))
+
+    # an unregistered tag says what to do about it rather than guessing
+    f2 = tmp()
+    h5open(f2, "w") do h5
+        g = HDF5.create_group(h5, "L1")
+        gW = HDF5.create_group(g, "W")
+        HDF5.attributes(gW)["gml_type"] = "NotRegisteredAnywhere"
+        gW["S"] = [1.0]
+    end
+    err = try
+        load(NetworkParameters, f2)
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("register_parameter_type!", err.msg)
+end
