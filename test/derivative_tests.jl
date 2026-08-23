@@ -76,7 +76,7 @@ end
 
 @testset "an untouched nested branch gives a zero block" begin
     # a whole layer the loss never mentions, not just one array of it. The cotangent is a structural
-    # zero at the *branch*, which used to be a latent method ambiguity where a zero leaf was fine.
+    # zero at the *branch*, which is a case of its own: handling a zero leaf does not cover it.
     ps2 = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0], b = [5.0])))
     v2, l2 = flatten(ps2)
     g = Zygote.gradient(w -> sum(unflatten(l2, w).L1.W), v2)[1]

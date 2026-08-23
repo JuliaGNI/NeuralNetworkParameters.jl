@@ -120,7 +120,7 @@ end
     @test back.L1.W == [1.0 2.0]
     @test back.L2.W == [3.0 4.0]
 
-    # and the same with the layer order that used to be lost
+    # and the same for a layer order that sorting the names alone would lose
     f2 = tmp()
     h5open(f2, "w") do h5
         for i in 1:10
@@ -131,55 +131,86 @@ end
     @test keys(load(NetworkParameters, f2)) == Tuple(Symbol("L$i") for i in 1:10)
 end
 
-@testset "and the ones GeometricMachineLearning tagged" begin
+@testset "files GeometricMachineLearning tagged still load" begin
     # The other branch of the legacy reader: a group carrying a `gml_type` attribute, with the type's
     # fields under their own names. Such a file records no storage/metadata split, so there is nothing
-    # here that could tell one from the other — the group's fields go to the reconstructor in *both*
+    # there that could tell one from the other — the group's fields go to the reconstructor in *both*
     # positions, and normalising them is the job of the package that owns the type.
-    # `GeometricOptimizers` is written against exactly that; this is what pins it.
+    #
+    # Registered under the name the current format uses, because a type has only the one: both
+    # `parameter_type_name` and `gml_type` say `Sym`, so a single reconstructor has to serve both
+    # layouts. `GeometricOptimizers` is written that way, and that is the half of the contract worth
+    # pinning — hence a file of each layout below, through the one registration.
     seen = Ref{Any}(nothing)
-    register_parameter_type!("GmlSym", function (storage, metadata)
+    function reconstruct(storage, metadata)
         seen[] = (storage, metadata)
         storage isa NamedTuple ? Sym(storage.S, storage.n) : Sym(storage, metadata.n)
-    end)
-
-    f = tmp()
-    h5open(f, "w") do h5
-        g = HDF5.create_group(h5, "L1")
-        gW = HDF5.create_group(g, "W")
-        HDF5.attributes(gW)["gml_type"] = "GmlSym"
-        gW["S"] = [1.0, 2.0, 3.0]
-        gW["n"] = 2
-        g["b"] = [4.0]
     end
 
-    back = load(NetworkParameters, f)
-    @test back.L1.W isa Sym
-    @test back.L1.W == sample_sym()
-    @test back.L1.b == [4.0]
+    saved = copy(PARAMETER_TYPE_REGISTRY)
+    try
+        register_parameter_type!("Sym", reconstruct)
 
-    # what the reconstructor was handed: the group's fields, the same object in both positions
-    storage, metadata = seen[]
-    @test storage isa NamedTuple
-    @test metadata === storage
-    # and by name only. A file in this layout records no key order, so the order these come back in is
-    # whatever HDF5 gives for the group — which is why a reconstructor for it has to reach for
-    # `storage.S` rather than `storage[1]`.
-    @test issetequal(keys(storage), (:S, :n))
+        f = tmp()
+        h5open(f, "w") do h5
+            g = HDF5.create_group(h5, "L1")
+            gW = HDF5.create_group(g, "W")
+            HDF5.attributes(gW)["gml_type"] = "Sym"
+            gW["S"] = [1.0, 2.0, 3.0]
+            gW["n"] = 2
+            g["b"] = [4.0]
+        end
+
+        back = load(NetworkParameters, f)
+        @test back.L1.W isa Sym
+        @test back.L1.W == sample_sym()
+        @test back.L1.b == [4.0]
+
+        # what the reconstructor was handed: the group's fields, the same object in both positions
+        storage, metadata = seen[]
+        @test storage isa NamedTuple
+        @test metadata === storage
+        # and by name only. A file in this layout records no key order, so the order these come back in
+        # is whatever HDF5 gives for the group — which is why a reconstructor for it has to reach for
+        # `storage.S` rather than `storage[1]`.
+        @test issetequal(keys(storage), (:S, :n))
+
+        # the same registration against a file this package wrote: storage is what `freeparameters`
+        # produced, metadata what `parameter_metadata` did, and the two are distinct
+        f2 = tmp()
+        save(f2, NetworkParameters((L1 = (W = sample_sym(),),)))
+        @test load(NetworkParameters, f2).L1.W == sample_sym()
+        storage, metadata = seen[]
+        @test storage == sample_sym().S
+        @test metadata == (n = 2,)
+
+        # a prototype is no substitute for the registry here: the group holds no storage to rebuild
+        # from, and the error says so rather than raising a `KeyError` from inside the reader
+        proto = NetworkParameters((L1 = (W = sample_sym(), b = [4.0]),))
+        e = try
+            load(NetworkParameters, f, proto)
+        catch err
+            err
+        end
+        @test e isa ArgumentError
+        @test occursin("register_parameter_type!", sprint(showerror, e))
+    finally
+        merge!(PARAMETER_TYPE_REGISTRY, saved)
+    end
 
     # an unregistered tag says what to do about it rather than guessing
-    f2 = tmp()
-    h5open(f2, "w") do h5
+    f3 = tmp()
+    h5open(f3, "w") do h5
         g = HDF5.create_group(h5, "L1")
         gW = HDF5.create_group(g, "W")
         HDF5.attributes(gW)["gml_type"] = "NotRegisteredAnywhere"
         gW["S"] = [1.0]
     end
-    err = try
-        load(NetworkParameters, f2)
-    catch e
-        e
+    e = try
+        load(NetworkParameters, f3)
+    catch err
+        err
     end
-    @test err isa ArgumentError
-    @test occursin("register_parameter_type!", err.msg)
+    @test e isa ArgumentError
+    @test occursin("register_parameter_type!", sprint(showerror, e))
 end

@@ -77,5 +77,12 @@ failing obscurely.
 Parameter files written before this package still load:
 
 - those written by `AbstractNeuralNetworks`, which are plain nested groups with no attributes;
-- those written by `GeometricMachineLearning`, whose structured matrices carry a `gml_type` attribute —
-  provided the type has been registered, since such a file records no prototype.
+- those written by `GeometricMachineLearning`, whose structured matrices carry a `gml_type` attribute.
+  Such a group holds the type's fields under their own names and no `storage` for [`rebuild`](@ref) to
+  take, so the registry is the only way in: the type has to have been registered, and a prototype is
+  no substitute. Passing one says so rather than failing obscurely.
+
+The group's fields reach the registered reconstructor in both argument positions, storage and
+metadata alike, since a file in that layout records nothing that could tell them apart. A
+reconstructor that means to read these files sorts that out itself — and reaches for its fields by
+name, the layout having recorded no key order either.

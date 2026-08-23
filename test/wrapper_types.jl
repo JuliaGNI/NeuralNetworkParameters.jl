@@ -3,7 +3,7 @@
 #
 # `Sym` mirrors `SymmetricMatrix`: n(n+1)/2 numbers behind an n×n interface, and an `n` that is *not*
 # part of the differentiable storage. `TwoBlock` mirrors `StiefelLieAlgHorMatrix`: freedom in two
-# blocks, one of them structured itself. `Frozen` has no storage at all.
+# blocks, one of them structured itself.
 
 import NeuralNetworkParameters as NNP
 
