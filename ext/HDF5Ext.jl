@@ -132,6 +132,7 @@ function h5load(g::Union{HDF5.Group, HDF5.File}, prototype)
     s === prototype &&
         throw(ArgumentError(string("expected a dataset for the terminal leaf of type ",
             typeof(prototype), ", found a group")))
+    haskey(g, "storage") || throw(_no_storage(g, prototype))
     rebuild(prototype, h5load(g["storage"], s))
 end
 
@@ -154,13 +155,37 @@ end
 
 _load_tuple(g) = Tuple(h5load(g[k]) for k in _stored_keys(g))
 
-function _load_wrapped(g)
-    name = read(HDF5.attributes(g)[TYPE_ATTR])
-    haskey(PARAMETER_TYPE_REGISTRY, name) || throw(ArgumentError(string(
+# Both readers can meet a type nobody registered, and both say the same thing about it. What differs is
+# the second way out: a leaf this package wrote can be rebuilt against a prototype instead, and one
+# `GeometricMachineLearning` wrote cannot, so each caller supplies its own closing line.
+function _unregistered(name, remedy)
+    ArgumentError(string(
         "the file contains a parameter of type `", name, "`, which is not registered.\n",
         "The package that owns `", name, "` has to call\n",
         "    NeuralNetworkParameters.register_parameter_type!(\"", name, "\", (storage, metadata) -> ...)\n",
-        "or the parameters have to be loaded against a prototype: `load(NetworkParameters, h5, prototype)`.")))
+        remedy))
+end
+
+# A group holding no `storage` is not what `_save_wrapped` writes. `GeometricMachineLearning`'s layout
+# holds the type's fields under their own names instead, and `rebuild` has nothing to take from that,
+# so the registry is the only way into such a file and the prototype the caller passed cannot help.
+function _no_storage(g, prototype)
+    a = HDF5.attributes(g)
+    haskey(a, "gml_type") || return ArgumentError(string(
+        "the group for the leaf of type ", typeof(prototype), " holds no `storage` to rebuild from."))
+    name = read(a["gml_type"])
+    ArgumentError(string(
+        "the group for the leaf of type ", typeof(prototype), " holds no `storage` to rebuild from:\n",
+        "GeometricMachineLearning wrote this `", name, "` with the type's fields under their own names,\n",
+        "and a file in that layout has to be read through the registry rather than against a prototype.\n",
+        "The package that owns `", name, "` has to call\n",
+        "    NeuralNetworkParameters.register_parameter_type!(\"", name, "\", (storage, metadata) -> ...)"))
+end
+
+function _load_wrapped(g)
+    name = read(HDF5.attributes(g)[TYPE_ATTR])
+    haskey(PARAMETER_TYPE_REGISTRY, name) || throw(_unregistered(name,
+        "or the parameters have to be loaded against a prototype: `load(NetworkParameters, h5, prototype)`."))
     storage = h5load(g["storage"])
     md = haskey(g, "metadata") ? _load_keyed(g["metadata"]) : NamedTuple()
     PARAMETER_TYPE_REGISTRY[name](storage, md)
@@ -175,9 +200,11 @@ function _load_legacy(g)
     a = HDF5.attributes(g)
     if haskey(a, "gml_type")
         name = read(a["gml_type"])
-        haskey(PARAMETER_TYPE_REGISTRY, name) || throw(ArgumentError(string(
-            "this file was written by GeometricMachineLearning and contains a `", name, "`, which is ",
-            "not registered. Register it with `register_parameter_type!`, or load against a prototype.")))
+        haskey(PARAMETER_TYPE_REGISTRY, name) || throw(_unregistered(name,
+            string(
+                "A prototype is no help here: GeometricMachineLearning wrote this `", name, "` with the ",
+                "type's fields under\ntheir own names, and such a group holds no `storage` for `rebuild` ",
+                "to work from.")))
         fields = _load_keyed(g)
         return PARAMETER_TYPE_REGISTRY[name](fields, fields)
     end

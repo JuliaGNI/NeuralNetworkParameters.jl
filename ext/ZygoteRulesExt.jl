@@ -11,9 +11,9 @@ import ZygoteRules
 # a parameter set and cannot be fed back to anything expecting one. Differentiating with respect to
 # the `NamedTuple` and rewrapping the result afterwards keeps the two shapes in step.
 #
-# This method belongs here rather than in `AbstractNeuralNetworks`, where it used to live: with the
-# parameter type defined in this package, `ZygoteRules.pullback` is the only foreign name in the
-# signature, and a method needs to own just one of them.
+# This method belongs here rather than in `AbstractNeuralNetworks`: with the parameter type defined
+# in this package, `ZygoteRules.pullback` is the only foreign name in the signature, and a method
+# needs to own just one of them.
 function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
     y, pb = ZygoteRules.pullback(f, NamedTuple{keys(ps)}(values(ps)))
 
