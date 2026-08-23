@@ -4,7 +4,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.1.1] — 2026-08-23
 
 ### Fixed
 
@@ -41,4 +41,5 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 `flatten`/`unflatten` with their derivative rules, and HDF5 storage through a package extension.
 
 [#11]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/11
+[0.1.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.0
