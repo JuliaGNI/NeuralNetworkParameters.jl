@@ -64,6 +64,12 @@ _normalized(::ChainRulesCore.AbstractZero) = nothing
 _normalized(::Nothing) = nothing
 _normalized(Δ) = Δ
 
+# A structural zero contributes nothing to the promoted element type, so a `NetworkParameters`
+# rewrapped out of a cotangent tree takes its element type from the leaves that are there. Zygote's
+# flavour of the gap is `nothing`, handled in `leaves.jl`; the `ChainRules` flavours belong here,
+# next to the code that knows what they are.
+parameter_eltype(::ChainRulesCore.AbstractZero) = Union{}
+
 function _accumulate!(Δv, l::ParametersLayout, Δ)
     Δ === nothing && return Δv
     _accumulate!(Δv, l.inner, _normalized(_unwrap_parameters(Δ)))

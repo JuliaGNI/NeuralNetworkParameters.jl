@@ -388,7 +388,9 @@ D8 (see D11). Step 3 is what gives it a legal home, next to
 homogeneous set, which `ArrayNamedTuple{T}` guarantees, and a reason to prefer `unflatten!` on the hot
 paths anyway, since writing through `copyto!` into an existing leaf cannot change its type. And an
 empty set flattens to `Vector{Union{}}` rather than `T[]`, because `_promote_eltypes(()) = Union{}`
-(`src/leaves.jl:165`); GO never constructs one.
+(`src/leaves.jl:165`); GO never constructs one. Since the container carries its element type, that
+`Union{}` is visible on the type as well as in `flatten`'s output: an empty set is a
+`NetworkParameters{Union{}}`, which binds and dispatches like any other.
 
 `GO/test/named_tuple_parameters.jl` is the gate for all three steps: it covers the heterogeneous
 `NamedTuple` (`:100-107`), `Float32` fidelity (`:109-123`) and manifold-kind preservation

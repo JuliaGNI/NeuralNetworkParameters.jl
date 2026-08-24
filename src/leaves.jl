@@ -152,15 +152,42 @@ parameter_eltype((a = Float32[1, 2], b = [3.0]))
 
 Float64
 ```
+
+# Implementation
+
+This function is total, where [`freeparameters`](@ref) is not: a leaf with no protocol reports
+`eltype(x)` rather than raising, and a gap in a gradient tree — `nothing`, or a `ChainRules`
+structural zero — contributes nothing to the promotion. Every [`NetworkParameters`](@ref) runs its
+constructor through here, including sets that hold no numbers at all, and a set that cannot be
+flattened is still a set with an element type. The protocol error comes from
+[`parameterlayout`](@ref), which decides something with it.
+
+An empty set has no element type to promote and so reports `Union{}`.
+
+For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
+nothing is recomputed and the call folds to a constant.
 """
-parameter_eltype(ps::NetworkParameters) = parameter_eltype(params(ps))
+parameter_eltype(::NetworkParameters{T}) where {T} = T
 parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(values(ps))
 parameter_eltype(x::Number) = typeof(x)
 
+# A gap in a gradient tree contributes nothing to the promotion, exactly as an empty set does.
+parameter_eltype(::Nothing) = Union{}
+
 function parameter_eltype(x)
-    s = freeparameters(x)
+    s = _eltype_storage(x)
     s === x ? eltype(x) : parameter_eltype(s)
 end
+
+# `freeparameters` throws for a leaf with no protocol, which is what `parameterlayout` wants and what
+# this function must not do: every `NetworkParameters` runs its constructor through here, including
+# sets that hold no numbers at all — a gradient tree with `nothing` where an untouched layer's
+# entries would be, or `SymbolicNeuralNetworks` wrapping generated functions in one. A leaf that is
+# neither an array nor a number is one this package has no business reading, and `eltype` is the
+# whole answer for it; a leaf that does keep numbers behind a non-array interface opts in with
+# `NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`.
+_eltype_storage(x::AbstractArray) = freeparameters(x)
+_eltype_storage(x) = x
 
 _promote_eltypes(::Tuple{}) = Union{}
 function _promote_eltypes(xs::Tuple)

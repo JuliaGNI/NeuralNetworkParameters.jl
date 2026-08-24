@@ -106,4 +106,18 @@ parameter_eltype
 
 [`flatten`](@ref) uses this, so a `Float32` network flattens to a `Vector{Float32}`. Defaulting to
 `Float64` instead would silently double the width of every single-precision network passing through,
-and of everything computed from the flat vector afterwards.
+and of everything computed from the flat vector afterwards. It is also what a
+[`NetworkParameters`](@ref) derives its element-type parameter from, at construction.
+
+Because every parameter set runs its constructor through this function, it is total where
+[`freeparameters`](@ref) is not: a leaf with no protocol reports `eltype(x)` rather than raising, and
+a gap in a gradient tree contributes nothing to the promotion. The protocol error comes from
+[`parameterlayout`](@ref) instead, which is where it decides something — a set that cannot be
+flattened is still a set with an element type. A leaf that keeps numbers behind a non-array interface
+opts into the recursion with one more method:
+
+```julia
+NNP.parameter_eltype(A::SymmetricMatrix) = parameter_eltype(freeparameters(A))
+```
+
+which an `AbstractArray` subtype — every structured leaf in the ecosystem — does not need.

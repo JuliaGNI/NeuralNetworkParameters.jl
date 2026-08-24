@@ -4,6 +4,61 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-24
+
+### Changed
+
+- **`NetworkParameters` carries the element type of its leaves as its first type parameter**, so that
+  `T` binds in a method signature: `f(ps::NetworkParameters{T}) where {T}`, or a `Union` with
+  `AbstractVector{T}`. `GeometricOptimizers` takes the element type from the *type* of the solution it
+  is handed — eleven sites spell it `where {T, VT<:OptimizerSolution{T}}`, across every cache and
+  state constructor, both `Optimizer` constructors and the `BFGSState` `update!` methods — and a
+  parameter set could not join that union while it carried no such parameter.
+
+  The element type is derived by `parameter_eltype` at construction rather than chosen. Naming it, as
+  `NetworkParameters{T}(nt)`, asserts it and raises if the leaves say otherwise, so a set whose type
+  disagrees with what it holds has no inhabitants. Deriving it costs nothing: it folds to a constant
+  and construction allocates as it did.
+
+  It is a *promotion*, not a guarantee of uniformity — unlike `GeometricOptimizers`'
+  `ArrayNamedTuple{T}`, `NetworkParameters{T}` does not license assuming every leaf is a `T` — and a
+  set with nothing to promote reports `Union{}`.
+- **The element type comes first, so the keys no longer fit in the braces.** Build a set from its keys
+  and values with `NetworkParameters(NamedTuple{keys}(vals))`, which is what the removed
+  `NetworkParameters{Keys}(values)` did anyway. The old spelling raises an `ArgumentError` saying so
+  rather than a `MethodError` about a conversion nobody asked for.
+- **`parameter_eltype` is total, where `freeparameters` is not.** A leaf with no protocol reports
+  `eltype(x)` rather than raising, and a gap in a gradient tree — `nothing`, or a `ChainRules`
+  structural zero — contributes nothing to the promotion. Every parameter set now runs its constructor
+  through this function, including sets that hold no numbers at all: a gradient tree with `nothing`
+  where an untouched layer's entries would be, or `SymbolicNeuralNetworks` wrapping generated
+  functions in one. A set that cannot be flattened is still a set with an element type; the protocol
+  error comes from `parameterlayout`, which is where it decides something.
+
+  A leaf that keeps numbers behind a non-array interface opts into the recursion with one more method,
+  `parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`. Every structured leaf in the
+  ecosystem is an `AbstractArray` subtype and needs nothing.
+- `parameter_eltype(ps::NetworkParameters)` reads the type parameter instead of walking the leaves, so
+  `flatten(ps)` and the `flatten` rrule are cheaper than they were.
+
+### Added
+
+- `NetworkParameters{T, Keys, ValueTypes}(nt)` and `NetworkParameters{T}(nt)` are written out, since
+  the derived element type makes the one that computes it an inner constructor and suppresses the
+  defaults. The three-parameter form is not optional: `ChainRulesCore.construct` calls it from
+  `+(::P, ::Tangent{P})`, which is how a parameter set and a cotangent add.
+- `parameter_eltype` methods for `nothing` and `ChainRulesCore.AbstractZero`, both `Union{}`.
+
+### Unchanged
+
+- **The on-disk HDF5 format.** The element type is derived on read, so nothing new is written and a
+  file from 0.1 loads with the element type its leaves imply.
+- `Base.eltype` is still deliberately undefined on `NetworkParameters`. The type forwards the
+  `NamedTuple` interface, for which `eltype` means the type of what iteration yields — a layer's
+  `NamedTuple` — rather than the numeric element type.
+- Equality, which compares the wrapped `NamedTuple`s: a `Float32` set and a `Float64` set holding the
+  same numbers are still `==`, and have different element types.
+
 ## [0.1.1] — 2026-08-23
 
 ### Fixed

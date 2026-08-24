@@ -122,3 +122,19 @@ end
     @test blocks.L1.W == J[1:2, :]
     @test blocks.L1.b == J[3:3, :]
 end
+
+@testset "wrapping in a NetworkParameters costs nothing extra" begin
+    # the element type is derived at construction, so this pins that it folds to a constant rather
+    # than being computed at run time
+    plain = (a = [1.0, 2.0], b = [3.0])
+    wrapped = NetworkParameters(plain)
+    @test isconcretetype(only(Base.return_types(NetworkParameters, Tuple{typeof(plain)})))
+
+    w, lw = flatten(wrapped)
+    _, lb = flatten(plain)
+    @test isconcretetype(only(Base.return_types(unflatten, Tuple{typeof(lw), Vector{Float64}})))
+
+    _allocs(l, v) = @allocated unflatten(l, v)
+    _allocs(lw, w); _allocs(lb, w)          # warm up both
+    @test _allocs(lw, w) == _allocs(lb, w)
+end

@@ -1,6 +1,6 @@
 @doc raw"""
     NetworkParameters(params::NamedTuple)
-    NetworkParameters{Keys}(values)
+    NetworkParameters{T}(params::NamedTuple)
 
 The parameters of a neural network: a `NamedTuple` whose entries follow the architecture, wrapped in
 a type of its own.
@@ -40,16 +40,90 @@ ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],)))
 (true, (:L1, :L2))
 ```
 
+# Element type
+
+The first type parameter is the element type the leaves promote to, so that `T` *binds* in a method
+signature:
+
+```julia
+f(ps::NetworkParameters{T}) where {T} = ...
+g(x::Union{AbstractVector{T}, NetworkParameters{T}}) where {T} = ...
+```
+
+That is the reason it is a type parameter and not only a function. `GeometricOptimizers` takes the
+element type from the *type* of the solution it is handed, and a parameter set could not join its
+`OptimizerSolution{T}` union while it carried no such parameter.
+
+It is derived by [`parameter_eltype`](@ref) at construction and never chosen; naming it, as
+`NetworkParameters{T}(params)`, asserts it and raises if the leaves say otherwise. Note that it is a
+*promotion*, not a guarantee of uniformity — a mixed set reports the type its leaves promote to while
+each leaf keeps its own:
+
+```jldoctest
+using NeuralNetworkParameters
+
+ps = NetworkParameters((L1 = (W = Float32[1 2], b = [3.0]),))
+(ps isa NetworkParameters{Float64}, eltype(ps.L1.W))
+
+# output
+
+(true, Float32)
+```
+
+A set with nothing to promote — an empty one, or a gradient tree that is all gaps — reports `Union{}`.
+
 # Implementation
 
 `getproperty` is overloaded to reach into the wrapped `NamedTuple`, so the field itself has to be
 read with `getfield` — which is what [`params`](@ref) does.
+
+There is deliberately no `Base.eltype`: this type forwards the `NamedTuple` interface, for which
+`eltype` means the type of what iteration yields — a layer's `NamedTuple` — rather than the numeric
+element type. The numeric one is [`parameter_eltype`](@ref).
 """
-struct NetworkParameters{Keys, ValueTypes}
+struct NetworkParameters{T, Keys, ValueTypes}
     params::NamedTuple{Keys, ValueTypes}
+
+    # `T` is derived rather than chosen, which makes this an inner constructor and suppresses the ones
+    # Julia would otherwise write. `parameter_eltype` lives in `leaves.jl`, included after this file;
+    # nothing calls a constructor at load time, so the binding exists before any caller reaches it.
+    function NetworkParameters(params::NamedTuple{Keys, ValueTypes}) where {Keys, ValueTypes}
+        T = parameter_eltype(params)
+        new{T, Keys, ValueTypes}(params)
+    end
 end
 
-NetworkParameters{Keys}(values) where {Keys} = NetworkParameters(NamedTuple{Keys}(values))
+# A caller that names `T` is asserting it, so these check rather than trust: a
+# `NetworkParameters{T, Keys, ValueTypes}` whose leaves promote to something else has no inhabitants.
+# The three-parameter form is not optional — `ChainRulesCore.construct` calls it from
+# `+(::P, ::Tangent{P})`, which is how a parameter set and a cotangent add.
+function NetworkParameters{T, Keys, ValueTypes}(nt) where {T, Keys, ValueTypes}
+    ps = NetworkParameters(convert(NamedTuple{Keys, ValueTypes}, nt))
+    ps isa NetworkParameters{T} || _element_type_error(ps, T)
+    ps
+end
+
+function NetworkParameters{T}(nt) where {T}
+    T isa Type || _keys_first_error(T)
+    ps = NetworkParameters(nt)
+    ps isa NetworkParameters{T} || _element_type_error(ps, T)
+    ps
+end
+
+@noinline function _element_type_error(ps, T)
+    throw(ArgumentError(string("the leaves of these parameters promote to ", parameter_eltype(ps),
+        ", not to ", T, ". The element type of a `NetworkParameters` is derived from its leaves ",
+        "rather than chosen, so naming it asserts it.")))
+end
+
+# The element type comes first, so `NetworkParameters{(:a, :b)}(values)` lands here with a tuple of
+# symbols where a type belongs. Left to dispatch it is a `MethodError` about a conversion nobody
+# asked for.
+@noinline function _keys_first_error(Keys)
+    throw(ArgumentError(string("`NetworkParameters{", Keys, "}(values)` names the element type, ",
+        "which comes first. To build a set from its keys and values write ",
+        "`NetworkParameters(NamedTuple{", Keys, "}(values))`.")))
+end
 
 """
     params(p::NetworkParameters)
@@ -61,9 +135,12 @@ the short name.
 """
 params(p::NetworkParameters) = getfield(p, :params)
 
-Base.hasproperty(::NetworkParameters{Keys}, s::Symbol) where {Keys} = s ∈ Keys
-Base.getproperty(p::NetworkParameters{Keys}, s::Symbol) where {Keys} = params(p)[s]
-Base.propertynames(::NetworkParameters{Keys}) where {Keys} = Keys
+# The `<:Any` is the element type, which comes first so that `NetworkParameters{T}` binds `T` in a
+# method signature — what `GeometricOptimizers` needs of a parameter set to take it as a solution.
+# These three are the only methods here that name a type parameter at all.
+Base.hasproperty(::NetworkParameters{<:Any, Keys}, s::Symbol) where {Keys} = s ∈ Keys
+Base.getproperty(p::NetworkParameters{<:Any, Keys}, s::Symbol) where {Keys} = params(p)[s]
+Base.propertynames(::NetworkParameters{<:Any, Keys}) where {Keys} = Keys
 
 Base.getindex(p::NetworkParameters, args...) = getindex(params(p), args...)
 Base.keys(p::NetworkParameters) = keys(params(p))
@@ -71,6 +148,11 @@ Base.values(p::NetworkParameters) = values(params(p))
 Base.length(p::NetworkParameters) = length(params(p))
 Base.iterate(p::NetworkParameters, args...) = iterate(params(p), args...)
 Base.pairs(p::NetworkParameters) = pairs(params(p))
+
+# Deliberately no `Base.eltype`. This type forwards the `NamedTuple` interface above, and for those
+# methods `eltype` means the type of what iteration yields — a layer's `NamedTuple` — not the numeric
+# element type. Defining it as the latter would make `eltype(ps)` and `eltype(collect(ps))` disagree.
+# The numeric one is `parameter_eltype(ps)`, and in a signature it is `NetworkParameters{T}`.
 
 # The conversion belongs to this package, since it owns the type. Defining it downstream would be
 # piracy on both counts — `Base`'s constructor and this package's type — which is what

@@ -16,8 +16,9 @@ include("wrapper_types.jl")
     @test parameter_metadata(A) == NamedTuple()
 end
 
+struct Unregistered end
+
 @testset "a type without the protocol says so" begin
-    struct Unregistered end
     e = try
         freeparameters(Unregistered())
     catch err
@@ -56,4 +57,29 @@ end
     @test parameter_eltype(sample_twoblock()) === Float64
     @test parameter_eltype(Float32[1, 2]) === Float32
     @test parameter_eltype(1.0f0) === Float32
+end
+
+@testset "for a NetworkParameters the element type is read off the type" begin
+    p32 = NetworkParameters((a = Float32[1],))
+    @test parameter_eltype(p32) === Float32
+    @test only(Base.return_types(parameter_eltype, Tuple{typeof(p32)})) === Type{Float32}
+end
+
+@testset "parameter_eltype is total where freeparameters is not" begin
+    # every `NetworkParameters` runs its constructor through `parameter_eltype`, including sets that
+    # hold no numbers at all, so this function cannot raise where `freeparameters` does
+    @test parameter_eltype(nothing) === Union{}
+    @test parameter_eltype((a = [1.0], b = nothing)) === Float64
+    @test parameter_eltype(NamedTuple()) === Union{}
+    @test parameter_eltype(Unregistered()) === Any
+    @test parameter_eltype((a = Unregistered(),)) === Any
+
+    # `flatten` still says exactly what the missing protocol is, from the layout walk
+    e = try
+        flatten(NetworkParameters((a = Unregistered(),)))
+    catch err
+        err
+    end
+    @test e isa ArgumentError
+    @test occursin("freeparameters", sprint(showerror, e))
 end

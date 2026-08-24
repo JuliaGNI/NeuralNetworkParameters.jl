@@ -1,6 +1,7 @@
 using NeuralNetworkParameters
 using ForwardDiff
 using Zygote
+using ChainRulesCore
 using Test
 
 include("wrapper_types.jl")
@@ -18,6 +19,9 @@ v, layout = flatten(ps)
     psd = unflatten(layout, d)
     @test eltype(psd.L1.W) <: ForwardDiff.Dual
     @test psd isa NetworkParameters
+    # and the element type follows them onto the type of the set
+    @test psd isa NetworkParameters{<:ForwardDiff.Dual}
+    @test NeuralNetworkParameters.parameter_eltype(psd) === eltype(psd.L1.W)
 end
 
 @testset "ForwardDiff on the flat form, read back structured" begin
@@ -89,4 +93,20 @@ end
     f(w) = sum(abs2, unflatten(sl, w).S.S)
     @test ForwardDiff.gradient(f, sv) ≈ 2 .* sv
     @test Zygote.gradient(f, sv)[1] ≈ 2 .* sv
+end
+
+@testset "a gradient tree with a hole still has an element type" begin
+    # the `ZygoteRules` extension rewraps the pullback's `NamedTuple`, in which an untouched layer is
+    # `nothing`. Deriving the element type in the constructor must not trip over the hole.
+    two = NetworkParameters((a = [1.0, 2.0], b = [3.0, 4.0]))
+    g = Zygote.gradient(p -> sum(p.a), two)[1]
+    @test g isa NetworkParameters{Float64}
+    @test g.b === nothing
+    @test g.a == [1.0, 1.0]
+end
+
+@testset "a structural zero contributes nothing to the promotion" begin
+    @test NeuralNetworkParameters.parameter_eltype(ChainRulesCore.ZeroTangent()) === Union{}
+    @test NeuralNetworkParameters.parameter_eltype((a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
+          Float32
 end

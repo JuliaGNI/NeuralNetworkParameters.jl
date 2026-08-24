@@ -23,6 +23,7 @@ end
 @testset "construction and conversion" begin
     @test flatlayout(fp) == parameterlayout(ps)
     @test NetworkParameters(fp) == ps
+    @test NetworkParameters(fp) isa NetworkParameters{Float64}
     @test unflatten(fp) == ps
     @test eltype(FlatParameters(Float32, ps)) === Float32
     @test_throws DimensionMismatch FlatParameters(zeros(3), parameterlayout(ps))

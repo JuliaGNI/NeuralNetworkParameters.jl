@@ -19,7 +19,7 @@ function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
 
     function network_parameters_pullback(output)
         p̄ = pb(output)[1]
-        (NetworkParameters{keys(ps)}(_values(p̄)),)
+        (NetworkParameters(NamedTuple{keys(ps)}(_values(p̄))),)
     end
 
     y, network_parameters_pullback

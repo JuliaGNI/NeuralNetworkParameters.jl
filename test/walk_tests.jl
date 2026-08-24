@@ -82,3 +82,14 @@ end
     @test foldparameters((s, x) -> s + sum(x), 0.0, NetworkParameters((
         a = [1.0, 2.0], b = [3.0]))) == 6.0
 end
+
+@testset "a mapped tree takes its element type from what the map returned" begin
+    @test mapstorage(x -> Float32.(x), ps) isa NetworkParameters{Float32}
+    @test mapparameters(x -> Float32.(x), ps) isa NetworkParameters{Float32}
+
+    # writing into existing leaves cannot change it: `copyto!` keeps the destination's types
+    dest = NetworkParameters((a = [1.0],))
+    mapparameters!((d, s) -> copyto!(d, s), dest, NetworkParameters((a = Float32[2],)))
+    @test dest isa NetworkParameters{Float64}
+    @test dest.a == [2.0]
+end
