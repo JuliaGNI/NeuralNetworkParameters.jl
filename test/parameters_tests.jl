@@ -43,6 +43,14 @@ end
     # attribute matter
     @test NetworkParameters((a = [1.0], b = [2.0])) !=
           NetworkParameters((b = [2.0], a = [1.0]))
+
+    # `hash` follows `isequal` to the wrapped `NamedTuple`. The default would take the type in, and
+    # the element type is part of that, so these two would hash apart while being `isequal`
+    f32, f64 = NetworkParameters((a = Float32[1],)), NetworkParameters((a = [1.0],))
+    @test isequal(f32, f64)
+    @test hash(f32) == hash(f64)
+    @test hash(ps) == hash(NetworkParameters(deepcopy(nt)))
+    @test length(Set([f32, f64])) == 1
 end
 
 @testset "conversion to a NamedTuple" begin
@@ -77,8 +85,10 @@ end
     # a gap where an untouched layer's entries would be, as `docs/src/walks.md` shows
     @test NetworkParameters((p = [10.0], q = nothing)) isa NetworkParameters{Float64}
     @test NetworkParameters((q = nothing,)) isa NetworkParameters{Union{}}
-    # a leaf that is not this package's business at all: constructing must not throw
-    @test NetworkParameters((f = sin,)) isa NetworkParameters{Any}
+    # a leaf this package cannot read numbers out of contributes nothing, exactly as a gap does:
+    # constructing must not throw, and one opaque leaf must not collapse the whole set to `Any`
+    @test NetworkParameters((f = sin,)) isa NetworkParameters{Union{}}
+    @test NetworkParameters((f = sin, a = [1.0])) isa NetworkParameters{Float64}
 
     # a nested set promotes through, reading the inner element type off its type
     @test NetworkParameters((i = NetworkParameters((a = Float32[1],)), b = [2.0])) isa
@@ -102,7 +112,11 @@ end
     # the `where {T, VT<:...}` shape the optimizer's cache and state constructors use
     h(::VT) where {T, VT <: Union{AbstractVector{T}, NetworkParameters{T}}} = T
     @test h(NetworkParameters((a = Float32[1],))) === Float32
-    @test only(Base.return_types(h, Tuple{typeof(ps)})) === Type{Float64}
+    @test h(ps) === Float64
+    # `<:` rather than `===`: what is pinned is that `T` is a constant the compiler already has, and
+    # 1.14-DEV spells a constant type-valued result `Core.TypeEgal{Float64}` where 1.13 spells it
+    # `Type{Float64}`
+    @test only(Base.return_types(h, Tuple{typeof(ps)})) <: Type{Float64}
 end
 
 @testset "naming the element type asserts it" begin

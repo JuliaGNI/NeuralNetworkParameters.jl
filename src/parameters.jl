@@ -1,6 +1,7 @@
 @doc raw"""
     NetworkParameters(params::NamedTuple)
     NetworkParameters{T}(params::NamedTuple)
+    NetworkParameters{T, Keys, ValueTypes}(params::NamedTuple)
 
 The parameters of a neural network: a `NamedTuple` whose entries follow the architecture, wrapped in
 a type of its own.
@@ -162,6 +163,12 @@ Base.NamedTuple(p::NetworkParameters) = params(p)
 
 Base.isequal(p1::NetworkParameters, p2::NetworkParameters) = isequal(params(p1), params(p2))
 Base.:(==)(p1::NetworkParameters, p2::NetworkParameters) = (params(p1) == params(p2))
+
+# `hash` follows `isequal` through to the wrapped `NamedTuple`, or the two would disagree: the default
+# `hash` takes in the type, and the element type is part of that, so a `Float32` set and a `Float64`
+# set holding the same numbers — `isequal`, by the method above — would hash apart and behave as two
+# different `Dict` keys.
+Base.hash(p::NetworkParameters, h::UInt) = hash(params(p), h)
 
 function Base.show(io::IO, ::MIME"text/plain", p::NetworkParameters)
     print(io, "NetworkParameters with ", length(p), length(p) == 1 ? " entry:" :

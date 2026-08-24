@@ -4,7 +4,7 @@ Analysis last revised 2026-08-24, against these working trees:
 
 | package | version | commit |
 |---|---|---|
-| `NeuralNetworkParameters` | 0.1.1 | this repository |
+| `NeuralNetworkParameters` | 0.2.0 | this repository |
 | `AbstractNeuralNetworks` | 0.7.0 | `c324789` |
 | `SymbolicNeuralNetworks` | 0.6.0 | `1d568c0` |
 | `GeometricMachineLearning` | 0.6.0 | `6db0b98` |
@@ -14,11 +14,13 @@ Analysis last revised 2026-08-24, against these working trees:
 Paths written `ANN/…`, `SNN/…`, `GML/…`, `GO/…`, `NLI/…` are relative to the corresponding sibling
 checkout.
 
-**Status.** Phase 1 is released as 0.1.1 and registered in General. Phase 2 is complete: this package
-is where the parameter container lives, and `AbstractNeuralNetworks` 0.7.0 consumes it. Phase 3 is
-half done — `GeometricOptimizers` 0.4.3 supplies the leaf protocol for its structured matrices, and
-`GeometricMachineLearning` 0.6.0 has handed the HDF5 traversal over — with a named remainder in both,
-set out in §8. `SymbolicNeuralNetworks` 0.6.0 adopted the layout type, which §8 had not asked it to.
+**Status.** Phase 1 is released and registered in General; 0.2.0 carries the element type of the
+leaves on the type, which is what `GeometricOptimizers` needs of a parameter set to take it as a
+solution — step 3 of §8. Phase 2 is complete: this package is where the parameter container lives,
+and `AbstractNeuralNetworks` 0.7.0 consumes it. Phase 3 is half done — `GeometricOptimizers` 0.4.3
+supplies the leaf protocol for its structured matrices, and `GeometricMachineLearning` 0.6.0 has
+handed the HDF5 traversal over — with a named remainder in both, set out in §8.
+`SymbolicNeuralNetworks` 0.6.0 adopted the layout type, which §8 had not asked it to.
 
 ---
 
@@ -127,7 +129,7 @@ packages adopt the container ahead of the ones they depend on.
 | D6 | `ParameterHandling.flatten` defaults to `Float64`, silently promoting `Float32` networks | `GO/…/named_tuple_wrapper.jl:14` | open in GO — step 2 of the GO work in §8. Not a defect here: `flatten(ps)` takes its element type from `parameter_eltype(ps)` |
 | D7 | With the type moved out of ANN, `ZygoteRules.pullback(f::Function, ::NeuralNetworkParameters)` owns neither argument type and becomes piracy there | was `ANN/src/pullback_for_applychain.jl:10-17` | **fixed** — the generic method is `ext/ZygoteRulesExt.jl:17`, and `ANN/src/pullback_for_applychain.jl:10-14` records the move |
 | D8 | GML's `h5save(::H5DataStore, ::StiefelManifold, ::AbstractString)` and `changebackend(::NeuralNetworkBackend, ::StiefelManifold)` are genuine type piracy — the generics are ANN's and the types are GO's, so GML owns nothing in either signature | `GML/ext/HDF5Ext.jl` | **half fixed.** The `h5save` half is gone: GML's extension defines no `h5save` at all, and GO's `ext/NeuralNetworkParametersExt.jl` serves the types through the protocol. The `changebackend` half is open — see D3 |
-| D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/src/layers/forcing_dissipation_layers.jl` | **fixed, phase 1** — `src/parameters.jl:79` |
+| D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/src/layers/forcing_dissipation_layers.jl` | **fixed, phase 1** — `src/parameters.jl:162` |
 | D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. Nothing existed for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/ext/HDF5Ext.jl` | **fixed** — `src/io.jl` owns the generic HDF5 path, so a nested parameter set serialises without anybody committing piracy |
 | D11 | `GeometricOptimizers.GlobalSection(ps::NetworkParameters)` — `GlobalSection` is GO's and `NetworkParameters` is this package's, so GML owns neither. Not in the original survey; it appeared when GML adopted the container while GO had not | `GML/src/optimizers/optimizer.jl:5-6` | open. Fixed by step 3 of the GO work in §8, which gives it a home next to `GO/src/global_sections/global_sections.jl:29` |
 
@@ -388,7 +390,7 @@ D8 (see D11). Step 3 is what gives it a legal home, next to
 homogeneous set, which `ArrayNamedTuple{T}` guarantees, and a reason to prefer `unflatten!` on the hot
 paths anyway, since writing through `copyto!` into an existing leaf cannot change its type. And an
 empty set flattens to `Vector{Union{}}` rather than `T[]`, because `_promote_eltypes(()) = Union{}`
-(`src/leaves.jl:165`); GO never constructs one. Since the container carries its element type, that
+(`src/leaves.jl:204`); GO never constructs one. Since the container carries its element type, that
 `Union{}` is visible on the type as well as in `flatten`'s output: an empty set is a
 `NetworkParameters{Union{}}`, which binds and dispatches like any other.
 

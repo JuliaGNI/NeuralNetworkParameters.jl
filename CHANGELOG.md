@@ -13,7 +13,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `AbstractVector{T}`. `GeometricOptimizers` takes the element type from the *type* of the solution it
   is handed — eleven sites spell it `where {T, VT<:OptimizerSolution{T}}`, across every cache and
   state constructor, both `Optimizer` constructors and the `BFGSState` `update!` methods — and a
-  parameter set could not join that union while it carried no such parameter.
+  parameter set could not join that union while it carried no such parameter ([#12]).
 
   The element type is derived by `parameter_eltype` at construction rather than chosen. Naming it, as
   `NetworkParameters{T}(nt)`, asserts it and raises if the leaves say otherwise, so a set whose type
@@ -26,28 +26,38 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - **The element type comes first, so the keys no longer fit in the braces.** Build a set from its keys
   and values with `NetworkParameters(NamedTuple{keys}(vals))`, which is what the removed
   `NetworkParameters{Keys}(values)` did anyway. The old spelling raises an `ArgumentError` saying so
-  rather than a `MethodError` about a conversion nobody asked for.
-- **`parameter_eltype` is total, where `freeparameters` is not.** A leaf with no protocol reports
-  `eltype(x)` rather than raising, and a gap in a gradient tree — `nothing`, or a `ChainRules`
-  structural zero — contributes nothing to the promotion. Every parameter set now runs its constructor
-  through this function, including sets that hold no numbers at all: a gradient tree with `nothing`
-  where an untouched layer's entries would be, or `SymbolicNeuralNetworks` wrapping generated
-  functions in one. A set that cannot be flattened is still a set with an element type; the protocol
-  error comes from `parameterlayout`, which is where it decides something.
+  rather than a `MethodError` about a conversion nobody asked for ([#12]).
+- **`parameter_eltype` is total, where `freeparameters` is not.** Every parameter set now runs its
+  constructor through this function, including sets that hold no numbers at all: a gradient tree with
+  `nothing` where an untouched layer's entries would be, or `SymbolicNeuralNetworks` wrapping
+  generated functions in one. A leaf this package cannot read numbers out of contributes nothing to
+  the promotion, exactly as an empty set does, and both report `Union{}` — where a leaf with no
+  protocol used to raise. A set that cannot be flattened is still a set with an element type; the
+  protocol error comes from `parameterlayout`, which is where it decides something ([#12]).
 
-  A leaf that keeps numbers behind a non-array interface opts into the recursion with one more method,
-  `parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`. Every structured leaf in the
-  ecosystem is an `AbstractArray` subtype and needs nothing.
+  The recursion follows `freeparameters` for an `AbstractArray` leaf, which every structured leaf in
+  the ecosystem is; asking an arbitrary type where its storage is would mean raising, which this
+  function must not do. A leaf that keeps its numbers behind another interface opts in with one method
+  more, `parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`, and `flatten` says so if
+  it is missing rather than guessing.
 - `parameter_eltype(ps::NetworkParameters)` reads the type parameter instead of walking the leaves, so
   `flatten(ps)` and the `flatten` rrule are cheaper than they were.
 
 ### Added
 
-- `NetworkParameters{T, Keys, ValueTypes}(nt)` and `NetworkParameters{T}(nt)` are written out, since
-  the derived element type makes the one that computes it an inner constructor and suppresses the
-  defaults. The three-parameter form is not optional: `ChainRulesCore.construct` calls it from
-  `+(::P, ::Tangent{P})`, which is how a parameter set and a cotangent add.
-- `parameter_eltype` methods for `nothing` and `ChainRulesCore.AbstractZero`, both `Union{}`.
+- `NetworkParameters{T, Keys, ValueTypes}(nt)` and `NetworkParameters{T}(nt)` are written out
+  ([#12]), since the derived element type makes the one that computes it an inner constructor and
+  suppresses the defaults. The three-parameter form is not optional: `ChainRulesCore.construct`
+  calls it from `+(::P, ::Tangent{P})`, which is how a parameter set and a cotangent add.
+- `flatten(ps)` raises an `ArgumentError` naming `parameter_eltype` when the leaves promote to
+  `Union{}` and the layout nevertheless found numbers to copy — a leaf keeping its storage behind an
+  interface that is not an array's, with no `parameter_eltype` method of its own. It used to be a
+  `Vector{Union{}}` failing on the first copy. An empty set still flattens to a `Vector{Union{}}`
+  ([#12]).
+- `Base.hash(::NetworkParameters)`, forwarding to the wrapped `NamedTuple` as `isequal` does. The
+  default takes the type in, and the element type is part of that, so a `Float32` set and a
+  `Float64` set holding the same numbers — `isequal`, and `==` — used to hash apart and behave as
+  two different `Dict` keys ([#12]).
 
 ### Unchanged
 
@@ -96,5 +106,7 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 `flatten`/`unflatten` with their derivative rules, and HDF5 storage through a package extension.
 
 [#11]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/11
+[#12]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/12
+[0.2.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.0
 [0.1.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.0

@@ -26,6 +26,18 @@ NeuralNetworkParameters.freeparameters(A::SymmetricMatrix) = A.S
 NeuralNetworkParameters.rebuild(A::SymmetricMatrix, data)  = SymmetricMatrix(data, A.n)
 ```
 
+Those two are the whole protocol for a leaf that is an `AbstractArray` subtype, which every structured
+parameter type in the ecosystem is. A leaf that keeps its numbers behind some *other* interface needs
+one method more, because [`parameter_eltype`](@ref) must not raise and so cannot ask an arbitrary type
+where its storage is:
+
+```julia
+NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))
+```
+
+Without it the leaf contributes nothing to the promoted element type, and [`flatten`](@ref) says so
+rather than guessing one.
+
 `GeometricOptimizers` already exposes exactly this relation as `Base.parent` for its manifolds,
 `VectorStorageMatrix`es and horizontal lifts, so one delegating method covers all of them:
 
@@ -155,14 +167,18 @@ Float64
 
 # Implementation
 
-This function is total, where [`freeparameters`](@ref) is not: a leaf with no protocol reports
-`eltype(x)` rather than raising, and a gap in a gradient tree — `nothing`, or a `ChainRules`
-structural zero — contributes nothing to the promotion. Every [`NetworkParameters`](@ref) runs its
-constructor through here, including sets that hold no numbers at all, and a set that cannot be
-flattened is still a set with an element type. The protocol error comes from
-[`parameterlayout`](@ref), which decides something with it.
+This function is total, where [`freeparameters`](@ref) is not: every [`NetworkParameters`](@ref) runs
+its constructor through here, including sets that hold no numbers at all — a gradient tree with
+`nothing` where an untouched layer's entries would be, or `SymbolicNeuralNetworks` wrapping generated
+functions in one. A leaf this package cannot read numbers out of contributes nothing to the promotion,
+exactly as an empty set does, and both report `Union{}`. A set that cannot be flattened is still a set
+with an element type; the protocol error comes from [`parameterlayout`](@ref), which decides something
+with it.
 
-An empty set has no element type to promote and so reports `Union{}`.
+The recursion follows [`freeparameters`](@ref) for an `AbstractArray` leaf — every structured
+parameter type in the ecosystem — and a leaf that keeps its numbers behind another interface opts in
+with one method more, described under [`freeparameters`](@ref). Asking an arbitrary type where its
+storage is would mean raising, which this function must not do.
 
 For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
 nothing is recomputed and the call folds to a constant.
@@ -171,23 +187,19 @@ parameter_eltype(::NetworkParameters{T}) where {T} = T
 parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(values(ps))
 parameter_eltype(x::Number) = typeof(x)
 
-# A gap in a gradient tree contributes nothing to the promotion, exactly as an empty set does.
-parameter_eltype(::Nothing) = Union{}
-
-function parameter_eltype(x)
-    s = _eltype_storage(x)
+function parameter_eltype(x::AbstractArray)
+    s = freeparameters(x)
     s === x ? eltype(x) : parameter_eltype(s)
 end
 
-# `freeparameters` throws for a leaf with no protocol, which is what `parameterlayout` wants and what
-# this function must not do: every `NetworkParameters` runs its constructor through here, including
-# sets that hold no numbers at all — a gradient tree with `nothing` where an untouched layer's
-# entries would be, or `SymbolicNeuralNetworks` wrapping generated functions in one. A leaf that is
-# neither an array nor a number is one this package has no business reading, and `eltype` is the
-# whole answer for it; a leaf that does keep numbers behind a non-array interface opts in with
-# `NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`.
-_eltype_storage(x::AbstractArray) = freeparameters(x)
-_eltype_storage(x) = x
+# A leaf this package cannot read numbers out of contributes nothing to the promotion, exactly as an
+# empty set does: a gap in a gradient tree — `nothing`, or a `ChainRules` structural zero — or a
+# generated function that `SymbolicNeuralNetworks` keeps in a parameter set. `freeparameters` raises
+# for all of these and this function must not, since every `NetworkParameters` runs its constructor
+# through it. A leaf that *does* keep numbers behind a non-array interface opts in with
+# `NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`;
+# without it `flatten` raises rather than guessing an element type for numbers it can see.
+parameter_eltype(x) = Union{}
 
 _promote_eltypes(::Tuple{}) = Union{}
 function _promote_eltypes(xs::Tuple)
