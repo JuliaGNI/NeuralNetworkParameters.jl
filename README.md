@@ -18,11 +18,6 @@ using Pkg
 Pkg.add("NeuralNetworkParameters")
 ```
 
-<!-- Delete this paragraph once the package has been registered via Register.yml. -->
-`NeuralNetworkParameters` is not in the General registry yet. Until it is, install it with
-`Pkg.develop(url = "https://github.com/JuliaGNI/NeuralNetworkParameters.jl")`, or point a `[sources]`
-entry at a local checkout.
-
 ## Quickstart
 
 `NetworkParameters` follows the architecture — a `NamedTuple` of `NamedTuple`s of arrays, one entry
