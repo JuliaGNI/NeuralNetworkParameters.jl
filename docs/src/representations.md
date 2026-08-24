@@ -11,7 +11,7 @@ NetworkParameters
 params
 ```
 
-`NetworkParameters` wraps a `NamedTuple` and forwards `getproperty`, `getindex`, `keys`, `values`,
+`NetworkParameters{T}` wraps a `NamedTuple` and forwards `getproperty`, `getindex`, `keys`, `values`,
 `length`, `iterate` and `pairs` to it, so it reads like the `NamedTuple` it holds. `NamedTuple(ps)`
 unwraps it again, and is the same thing as [`params`](@ref); the conversion is defined here rather
 than downstream because a package that owns neither `Base.NamedTuple` nor the type cannot define it
@@ -21,6 +21,13 @@ The wrapper is not decoration. A bare `NamedTuple` belongs to `Base`, so any pac
 parameter set its own behaviour — saving it, flattening it, stepping an optimizer over it — must write
 methods whose every argument type is somebody else's. That is type piracy, and two packages doing it
 can silently disagree about the same call. Owning the type removes the problem at the root.
+
+The `T` is the element type the leaves promote to, carried on the type so that a method signature can
+bind it — `f(ps::NetworkParameters{T}) where {T}`, or a `Union` with `AbstractVector{T}`. A set is
+built from its keys and values with `NetworkParameters(NamedTuple{keys}(vals))`, since the braces name
+the element type rather than the keys, and it is derived rather than chosen: writing
+`NetworkParameters{T}(nt)` asserts `T` and raises if the leaves say otherwise. See
+[`parameter_eltype`](@ref) for what the promotion does and does not guarantee.
 
 Note that key *order* is part of the identity of a parameter set:
 

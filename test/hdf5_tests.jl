@@ -35,6 +35,9 @@ end
     f = tmp()
     save(f, NetworkParameters((a = Float32[1, 2],)))
     @test eltype(load(NetworkParameters, f).a) === Float32
+    # and the element type of the set follows, since it is derived on read: nothing about it is
+    # written to the file, so a file written before it existed still loads with the right one
+    @test load(NetworkParameters, f) isa NetworkParameters{Float32}
 end
 
 @testset "structured leaves, through the registry" begin

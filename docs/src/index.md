@@ -28,8 +28,9 @@ the leaf protocol below, one implementation covers all of them and needs to know
 A note on the name: the package is `NeuralNetworkParameters`, the type it exports is
 `NetworkParameters`. A package cannot export a type sharing its own name — the module binding wins at
 the `using` site, so `NeuralNetworkParameters(nt)` would try to call a `Module`.
-Meanwhile `AbstractNeuralNetworks` keeps a `const NeuralNetworkParameters = NetworkParameters` alias for
-compatibility.
+`AbstractNeuralNetworks` 0.7 dropped the name rather than aliasing it, so that one type has one name
+across the ecosystem: code written against `NeuralNetworkParameters` as a *type* reaches for
+`NetworkParameters` here instead.
 
 ## The two shapes
 

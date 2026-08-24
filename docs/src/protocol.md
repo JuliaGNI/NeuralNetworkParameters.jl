@@ -106,4 +106,47 @@ parameter_eltype
 
 [`flatten`](@ref) uses this, so a `Float32` network flattens to a `Vector{Float32}`. Defaulting to
 `Float64` instead would silently double the width of every single-precision network passing through,
-and of everything computed from the flat vector afterwards.
+and of everything computed from the flat vector afterwards. It is also what a
+[`NetworkParameters`](@ref) derives its element-type parameter from, at construction.
+
+Because every parameter set runs its constructor through this function, it is total where
+[`freeparameters`](@ref) is not: a leaf this package cannot read numbers out of contributes nothing to
+the promotion rather than raising, and so does a gap in a gradient tree. The protocol error comes from
+[`parameterlayout`](@ref) instead, which is where it decides something — a set that cannot be
+flattened is still a set with an element type.
+
+That is also why the recursion follows [`freeparameters`](@ref) for an `AbstractArray` leaf only:
+asking an arbitrary type where its storage is would mean raising. So a leaf that keeps its numbers
+behind an interface that is *not* an array's has nothing to contribute, even with the two protocol
+methods defined:
+
+```jldoctest protocol
+struct Blocks              # not an `AbstractArray`, so nothing about it says where the numbers are
+    data::Vector{Float64}
+end
+
+NNP.freeparameters(b::Blocks) = b.data
+NNP.rebuild(::Blocks, data) = Blocks(data)
+
+parameter_eltype(NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),)))
+
+# output
+
+Union{}
+```
+
+`flatten` raises there rather than guessing an element type for numbers the promotion knows nothing
+about. One method more opts the leaf into the recursion, and the set flattens as itself again:
+
+```jldoctest protocol
+NNP.parameter_eltype(b::Blocks) = parameter_eltype(freeparameters(b))
+
+ps = NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),))
+(parameter_eltype(ps), first(flatten(ps)))
+
+# output
+
+(Float64, [1.0, 2.0])
+```
+
+An `AbstractArray` subtype — every structured leaf in the ecosystem — needs none of this.
