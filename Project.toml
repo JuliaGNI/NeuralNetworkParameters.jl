@@ -1,6 +1,6 @@
 name = "NeuralNetworkParameters"
 uuid = "67f4d93a-60e9-472b-8cdd-1ccf6005724a"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Michael Kraus <michael.kraus@ipp.mpg.de> and contributors"]
 
 [deps]
