@@ -10,6 +10,23 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 free; this release makes them *compilable* on a branch wider than a couple of dozen children, which
 they were not.
 
+### Changed
+
+- **Julia 1.11 is now the minimum**, up from 1.10. The walks below are `@generated` bodies, and Julia
+  1.10 cannot inline one: neither `Expr(:meta, :inline)` in the generated body, nor `@inline` on the
+  declaration, nor `@inline` at the call site has any effect there — the call stays out of line. The
+  bodies are allocation-free on 1.10 too; what `flatten!` and `unflatten!` need from the inlining is
+  that it lets the temporaries at a branch boundary be elided. Without it, on 1.10, against 0.2.1:
+
+  | set | `flatten!` | `unflatten!` | `unflatten` |
+  |---|---|---|---|
+  | one with structured leaves | 0 → 192 | 0 → 608 | 576 → 1616 |
+  | a two-level `NamedTuple` | 0 → 0 | 0 → 176 | 960 → 1408 |
+
+  That is the guarantee 0.2.1 exists to provide, so on 1.10 the two cannot both be had. Julia 1.11 and
+  later elide those temporaries without inlining, and 1.11, 1.12 and 1.13 were each checked at zero on
+  a nested set, a set with structured leaves, a wide flat branch and a wide branch of branches.
+
 ### Fixed
 
 - **Every walk across the children of one branch cost one specialisation per child.** The walk *down*
@@ -60,7 +77,8 @@ they were not.
 - **`flatten!` and `unflatten!` allocated on a branch of more than about forty children**, against the
   guarantee in their own docstrings. Two temporary tuples were materialised per branch — `values(ps)`
   and `values(l.children)` — which is free while a branch is narrow enough to keep in registers and is
-  not beyond that. Measured on the same flat sets, bytes per call from inside a function:
+  not beyond that. Measured on the same flat sets on Julia 1.13, bytes per call from inside a
+  function:
 
   | children | 32 | 48 | 64 | 128 | 369 |
   |---|---|---|---|---|---|
@@ -77,7 +95,7 @@ they were not.
   as *literal* `Symbol`s — which is what keeps `_cotangent_get`'s `haskey` a compile-time question, the
   property the chain had been relying on constant propagation for. `_matching_named` goes with it.
 
-  Bytes per pullback call, on the same flat sets:
+  Bytes per pullback call, on the same flat sets and again on Julia 1.13:
 
   | children | 16 | 32 | 48 | 64 | 128 | 369 |
   |---|---|---|---|---|---|---|
@@ -113,10 +131,15 @@ they were not.
   skip, `foldparameters` and `parameter_eltype`, and pins the in-place forms at zero allocations there.
   It also covers 48, either side of the 32 fields `Base` unrolls a tuple up to.
 
+  A 48-wide branch whose children are themselves branches is covered as well, and separately, because
+  the two shapes fail differently: a flat branch's children are arrays, which are heap objects
+  already, so a walk that reaches one has nothing to keep off the heap, while a branch of branches has
+  to be taken apart in place at every level. The width is a consumer's; the nesting is a network's.
+
   It asserts the properties and not the timings — a wall-clock bound would be a flake on a loaded
   machine — so the regression test is that the file *completes*, which before this release it did not.
-  It costs the suite about 40 s, all of it compilation at the wide width, and that is the honest price
-  of covering the width a consumer actually has.
+  It costs the suite about 45 s on Julia 1.13 and about 1 m 45 s on 1.11, all of it compilation at the
+  wide width, and that is the honest price of covering the width a consumer actually has.
 
 - `scripts/wide_branch_cost.jl`, the harness behind both tables above.
 

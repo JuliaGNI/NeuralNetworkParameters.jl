@@ -20,7 +20,6 @@
 # calls `flatten` at all comes from the second form.
 
 using NeuralNetworkParameters
-using NeuralNetworkParameters: mapparameters
 
 const T = Float32
 
@@ -37,8 +36,8 @@ function first_call(f, args...)
     round(time() - t; digits = 2)
 end
 
-# From inside a function, for the reason `test/flatten_tests.jl` gives: at the top level the walk is not
-# specialised and the figure is the harness's rather than the code's.
+# From inside a function, for the reason `test/flatten_tests.jl` gives: that is the claim that matters,
+# an optimizer's inner loop rather than the top level of a script.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 

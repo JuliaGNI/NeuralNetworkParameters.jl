@@ -79,10 +79,8 @@ end
 
 Write the numbers of `ps` into the existing vector `v`, and return `v`.
 
-Allocation-free when the `layout` is supplied and the call is made from compiled code, which is the
-point: an optimizer that flattens its parameters once per step, or twice per inner product, should not
-allocate a fresh vector each time. (Called from an uninferred context — the top level of a script, say —
-the recursion is not specialised and costs a few tens of bytes per leaf on Julia 1.10.)
+Allocation-free when the `layout` is supplied, which is the point: an optimizer that flattens its
+parameters once per step, or twice per inner product, should not allocate a fresh vector each time.
 
 ```julia
 v, layout = flatten(ps)          # once
@@ -185,14 +183,12 @@ are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing
 @inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
 @inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
 
-# `unflatten` over the children of a branch layout, in the shape the rest of this package walks a
-# layout tree: `Base.tail` recursion, inlined, rather than `map` over a closure.
+# `unflatten` over the children of a branch layout, written out for the reason the head of `walk.jl`
+# gives rather than written as `map` over a closure.
 #
-# The two are equally inferable, but `map` leaves the closure over `data` to be elided and not every
-# version elides it. On Julia 1.11 the recursion halves what an `unflatten` call costs, from two heap
-# allocations per leaf to one; on 1.10 it is worth as much again on some shapes and nothing on others.
-# It also keeps the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children and
-# which returns a tuple with no concrete type.
+# The two are equally inferable, but `map` leaves the closure over `data` to be elided, and past 32
+# children it drops to `Base`'s `Any32` fallback, which returns a tuple with no concrete type. A
+# written-out body leaves no closure to elide and reaches no fallback, at any width.
 #
 # `data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
 # helper serves both.

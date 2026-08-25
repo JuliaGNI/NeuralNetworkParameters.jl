@@ -27,9 +27,16 @@ const WIDTHS = (48, 369)
 wide_set(k) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
     Tuple(fill(Float32(i), 2, 2) for i in 1:k))
 
-# Allocations are measured from inside a function throughout, for the reason
-# `flatten_tests.jl` gives: at the top level the walk is not specialised and the figure is the
-# harness's, not the code's.
+# The same width with a layer's worth of nesting under each child, which is the shape a network of
+# many layers actually has. `wide_set` exercises the width alone: its children are arrays, and an
+# array is already a heap object, so a walk that reaches one has nothing to keep off the heap. Under
+# `nested_set` every child is a branch that a walk has to take apart in place, and that is where a
+# walk which is written correctly for the width but not inlined shows up.
+nested_set(k) = NamedTuple{Tuple(Symbol("L", i) for i in 1:k)}(
+    Tuple((W = fill(Float32(i), 2, 2), b = fill(Float32(i), 2)) for i in 1:k))
+
+# Allocations are measured from inside a function throughout, for the reason `flatten_tests.jl` gives:
+# that is the claim that matters, an optimizer's inner loop rather than the top level of a testset.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 
@@ -85,6 +92,26 @@ end
     @test touched[] == 0
 end
 
+# 48 and not 369: the width is covered above, and what nesting adds is a branch whose children are
+# branches, which 48 is already well past the unrolling boundary for. A real consumer has one shape or
+# the other — the 369-child set is flat, and a network with a child per layer is dozens deep, not
+# hundreds — and the nested 369 would cost the suite another minute to say nothing the 48 does not.
+@testset "a wide branch of branches round-trips and does not allocate at $k children" for k in (48,)
+    ps = nested_set(k)
+    v, layout = flatten(ps)
+
+    @test length(v) == 6k
+    @test unflatten(layout, v) == ps
+    @test mapparameters(x -> 2x, ps).L1.W == 2 * ps.L1.W
+
+    buf = similar(v)
+    dest = unflatten(layout, zero(v))
+    _flatten_allocs(buf, ps, layout)          # warm up the call and the measurement
+    _unflatten_allocs(dest, layout, v)
+    @test _flatten_allocs(buf, ps, layout) == 0
+    @test _unflatten_allocs(dest, layout, v) == 0
+end
+
 @testset "a wide branch is a ParameterSet and a parameter tree" begin
     ps = wide_set(369)
     @test ps isa ParameterSet
@@ -93,10 +120,14 @@ end
     @test parameter_eltype(ps) == Float32
 end
 
-# The arity check the `Base.tail` chains used to get by running out of `Tuple{}` methods, and which the
-# written-out bodies have to raise for themselves.
-@testset "walking branches of different widths is an error" begin
-    @test_throws ArgumentError mapparameters(+, wide_set(48), wide_set(47))
+# Two checks, and a pair of wide `NamedTuple`s only ever reaches the first of them: branches of
+# different widths are keyed differently, so `_check_keys` rejects them before any walk starts. The
+# arity check the `Base.tail` chains used to get by running out of `Tuple{}` methods, and which the
+# written-out bodies raise for themselves, is reachable only through a *positional* branch — a
+# multi-block leaf whose blocks do not line up.
+@testset "walking mismatched branches is an error" begin
+    @test_throws "different keys" mapparameters(+, wide_set(48), wide_set(47))
+    @test_throws "same number of children" mapparameters(+, ([1.0], [2.0]), ([1.0],))
 end
 
 # The reverse pass over a wide branch. `_accumulate_named!` was the one walk in `src/derivatives.jl`

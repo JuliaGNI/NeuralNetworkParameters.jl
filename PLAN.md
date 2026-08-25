@@ -153,8 +153,8 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/src/layers/forcing_dissipation_layers.jl` | **fixed, phase 1** — `src/parameters.jl:162` |
 | D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. Nothing existed for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/ext/HDF5Ext.jl` | **fixed** — `src/io.jl` owns the generic HDF5 path, so a nested parameter set serialises without anybody committing piracy |
 | D11 | `GeometricOptimizers.GlobalSection(ps::NetworkParameters)` — `GlobalSection` is GO's and `NetworkParameters` is this package's, so GML owns neither. Not in the original survey; it appeared when GML adopted the container while GO had not | `GML/src/optimizers/optimizer.jl:5-6` | open. Fixed by step 3 of the GO work in §8, which gives it a home next to `GO/src/global_sections/global_sections.jl:29` |
-| D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s |
-| D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width |
+| D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s. Julia 1.11 is the compat floor as a consequence: 1.10 cannot inline a `@generated` body, and that inlining is what D13 needs |
+| D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width and every depth, on Julia 1.11, 1.12 and 1.13 |
 | D14 | The reverse pass had D13's defect too: 70 592 bytes per pullback call at 48 children, 161 504 at 64 | was `src/derivatives.jl` | **fixed, 0.2.2** — `_accumulate_named!` splices the branch's keys in as literals, which is also what keeps `_cotangent_get`'s `haskey` a compile-time question |
 
 D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
@@ -267,14 +267,14 @@ D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at bot
 `mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters`, the
 `unflatten` pullback, and the in-place forms at zero allocations. It asserts the properties and not the
 timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
-the file *completes*, which before 0.2.2 it did not. It costs the suite about 40 s, all of it
-compilation at that width, and that is the price of covering the width a consumer has rather than the
-width that is convenient.
+the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
+about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
+width a consumer has rather than the width that is convenient.
 
 The suite covers, beyond round trips: `Float32` fidelity (D6); zero allocation for `flatten!` and
-`unflatten!` — measured from inside a function, since a top-level `@allocated` reports a few tens of
-bytes per leaf on Julia 1.10, where the recursion is not specialised; a structured leaf and a two-block
-leaf whose types survive the round trip (D5); scalar, empty and tuple leaves; `Dual`-valued
+`unflatten!` — measured from inside a function, which is the claim that matters, an optimizer's inner
+loop rather than the top level of a testset; a structured leaf and a two-block leaf whose types
+survive the round trip (D5); scalar, empty and tuple leaves; `Dual`-valued
 unflattening; agreement between `ForwardDiff` on the flat form and `Zygote` on the structured one;
 Zygote through both conversions; a structurally-zero gradient block; the `nothing`-branch skip in the
 walks; ten-layer HDF5 key ordering (D4); both HDF5 load paths; and files in the two older formats.

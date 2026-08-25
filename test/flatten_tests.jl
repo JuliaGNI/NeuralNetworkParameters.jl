@@ -83,10 +83,7 @@ end
 end
 
 # Measured from inside a function, which is the claim that matters: `flatten!` allocates nothing when
-# called from compiled code, such as an optimizer inner loop. Measuring at the top level of a testset
-# instead reports a few tens of bytes on Julia 1.10 — the recursion is not specialised in an uninferred
-# top-level context, and the figure tracks the number of leaves rather than anything about the leaves
-# themselves, appearing for plain arrays just as for structured ones.
+# called from compiled code, such as an optimizer inner loop.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 
@@ -101,12 +98,12 @@ _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
     @test _unflatten_allocs(dest, layout, v) == 0
 end
 
-# `unflatten` used to be the one walk here written as `map` over a closure rather than as the
-# `Base.tail` recursion the rest of the package uses. Two things came of that, and this pins both.
-# `map` unrolls a tuple only up to 32 elements and drops to `Base`'s `Any32` fallback beyond it, which
+# `unflatten` used to be the one walk here written as `map` over a closure rather than written out the
+# way the rest of the package walks a branch. Two things came of that, and this pins both. `map`
+# unrolls a tuple only up to 32 elements and drops to `Base`'s `Any32` fallback beyond it, which
 # returns a tuple with no concrete type; and the closure over the flat vector is left to be elided,
-# which Julia 1.11 and later do and 1.10 does not — one heap allocation per nesting level per call, on
-# a path `SymbolicNeuralNetworks` runs once per evaluation of a generated function
+# which costs a heap allocation per nesting level per call wherever it is not — on a path
+# `SymbolicNeuralNetworks` runs once per evaluation of a generated function
 # ([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)).
 @testset "unflatten stays inferable past 32 children" begin
     keys40 = ntuple(i -> Symbol(:p, i), 40)
