@@ -63,8 +63,8 @@ freeparameters(A) === A
 true
 ```
 """
-freeparameters(x::AbstractArray) = x
-freeparameters(x::Number) = x
+@inline freeparameters(x::AbstractArray) = x
+@inline freeparameters(x::Number) = x
 
 function freeparameters(x)
     throw(ArgumentError(_no_protocol_message(x, :freeparameters)))
@@ -183,11 +183,11 @@ storage is would mean raising, which this function must not do.
 For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
 nothing is recomputed and the call folds to a constant.
 """
-parameter_eltype(::NetworkParameters{T}) where {T} = T
-parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(values(ps))
-parameter_eltype(x::Number) = typeof(x)
+@inline parameter_eltype(::NetworkParameters{T}) where {T} = T
+@inline parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(values(ps))
+@inline parameter_eltype(x::Number) = typeof(x)
 
-function parameter_eltype(x::AbstractArray)
+@inline function parameter_eltype(x::AbstractArray)
     s = freeparameters(x)
     s === x ? eltype(x) : parameter_eltype(s)
 end
@@ -201,7 +201,7 @@ end
 # without it `flatten` raises rather than guessing an element type for numbers it can see.
 parameter_eltype(x) = Union{}
 
-_promote_eltypes(::Tuple{}) = Union{}
-function _promote_eltypes(xs::Tuple)
+@inline _promote_eltypes(::Tuple{}) = Union{}
+@inline function _promote_eltypes(xs::Tuple)
     promote_type(parameter_eltype(first(xs)), _promote_eltypes(Base.tail(xs)))
 end

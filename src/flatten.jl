@@ -153,16 +153,15 @@ unflatten(layout, [10.0, 20.0, 30.0]).L1.W
 Each leaf is *copied* out of `v` rather than viewed into it, so the leaves are ordinary arrays and
 cannot alias each other or the flat vector.
 """
-unflatten(l::ParametersLayout, v::AbstractVector) = NetworkParameters(unflatten(l.inner, v))
-function unflatten(l::NestedLayout, v::AbstractVector)
-    NamedTuple{keys(l.children)}(map(c -> unflatten(c, v), values(l.children)))
-end
-unflatten(l::TupleLayout, v::AbstractVector) = map(c -> unflatten(c, v), l.children)
-unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
-unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
+@inline unflatten(l::ParametersLayout, v::AbstractVector) = NetworkParameters(unflatten(l.inner, v))
+@inline unflatten(l::NestedLayout, v::AbstractVector) =
+    NamedTuple{keys(l.children)}(_unflatten_children(values(l.children), v))
+@inline unflatten(l::TupleLayout, v::AbstractVector) = _unflatten_children(l.children, v)
+@inline unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
+@inline unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
 
-_reshape_leaf(data::AbstractVector, ::Tuple{}) = data[begin]
-_reshape_leaf(data::AbstractVector, size::Tuple) = reshape(data, size...)
+@inline _reshape_leaf(data::AbstractVector, ::Tuple{}) = data[begin]
+@inline _reshape_leaf(data::AbstractVector, size::Tuple) = reshape(data, size...)
 
 @doc raw"""
     unflatten(layout, J::AbstractMatrix)
@@ -173,13 +172,32 @@ flat vector, so that the block belonging to each parameter can be read off.
 Each leaf becomes the ``n_\mathrm{leaf} \times \mathrm{size}(J, 2)`` row block it occupies. The leaves
 are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing to rebuild it into.
 """
-unflatten(l::ParametersLayout, J::AbstractMatrix) = NetworkParameters(unflatten(l.inner, J))
-function unflatten(l::NestedLayout, J::AbstractMatrix)
-    NamedTuple{keys(l.children)}(map(c -> unflatten(c, J), values(l.children)))
-end
-unflatten(l::TupleLayout, J::AbstractMatrix) = map(c -> unflatten(c, J), l.children)
-unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
-unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
+@inline unflatten(l::ParametersLayout, J::AbstractMatrix) = NetworkParameters(unflatten(l.inner, J))
+@inline unflatten(l::NestedLayout, J::AbstractMatrix) =
+    NamedTuple{keys(l.children)}(_unflatten_children(values(l.children), J))
+@inline unflatten(l::TupleLayout, J::AbstractMatrix) = _unflatten_children(l.children, J)
+@inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
+@inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
+
+"""
+    _unflatten_children(layouts, data)
+
+Run [`unflatten`](@ref) over the children of a branch layout, in the shape the rest of this package
+walks a layout tree: `Base.tail` recursion, inlined, rather than `map` over a closure.
+
+The two are equally inferable, but `map` leaves the closure over `data` to be elided and Julia 1.10
+does not always elide it — one heap-allocated closure per nesting level per call, which
+`SymbolicNeuralNetworks` measured as most of a 2.3x allocation gap against 1.11 and later
+([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)). It
+also keeps the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children and which
+returns a tuple with no concrete type.
+
+`data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
+helper serves both.
+"""
+@inline _unflatten_children(::Tuple{}, _) = ()
+@inline _unflatten_children(layouts::Tuple, data) =
+    (unflatten(first(layouts), data), _unflatten_children(Base.tail(layouts), data)...)
 
 """
     unflatten!(ps, layout, v)

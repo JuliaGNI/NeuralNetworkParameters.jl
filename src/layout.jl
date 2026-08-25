@@ -77,13 +77,13 @@ end
 
 The stretch of the flat vector that `layout` occupies.
 """
-parameterrange(l::LeafLayout) = l.range
-parameterrange(l::NestedLayout) = l.range
-parameterrange(l::TupleLayout) = l.range
-parameterrange(l::WrappedLayout) = parameterrange(l.inner)
-parameterrange(l::ParametersLayout) = parameterrange(l.inner)
+@inline parameterrange(l::LeafLayout) = l.range
+@inline parameterrange(l::NestedLayout) = l.range
+@inline parameterrange(l::TupleLayout) = l.range
+@inline parameterrange(l::WrappedLayout) = parameterrange(l.inner)
+@inline parameterrange(l::ParametersLayout) = parameterrange(l.inner)
 
-Base.length(l::ParameterLayout) = length(parameterrange(l))
+@inline Base.length(l::ParameterLayout) = length(parameterrange(l))
 
 Base.:(==)(a::LeafLayout, b::LeafLayout) = a.range == b.range && a.size == b.size
 Base.:(==)(a::WrappedLayout, b::WrappedLayout) = a.inner == b.inner

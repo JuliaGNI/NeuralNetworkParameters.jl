@@ -4,6 +4,33 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — unreleased
+
+### Fixed
+
+- **The out-of-place `unflatten` allocated a closure per nesting level on Julia 1.10.** It was the one
+  walk in the package written as `map(c -> unflatten(c, v), values(l.children))` rather than as the
+  `Base.tail` recursion `src/walk.jl` states the house rule to be, and which `flatten!`, `unflatten!`
+  and `mapparameters` all follow. Both are equally inferable — nothing here was ever type unstable —
+  but `map` leaves the closure over the flat vector to be elided, and Julia 1.10 does not always elide
+  it.
+
+  `SymbolicNeuralNetworks` splits the result of a generated function into the shape of a parameter set
+  through this function, once per call, so the cost landed on a hot path: 800 bytes per call on 1.10
+  against 352 on 1.11 and later, which `NonlinearIntegrators` measured as 1.85x the allocations in its
+  Newton residual and had to ship a version-conditional allocation ceiling for
+  ([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)).
+  Rewritten as `_unflatten_children`, it costs 512 on 1.10 and is unchanged on 1.11, 1.12 and 1.13 —
+  what is left between the versions is Julia 1.10's `reshape`, which allocates 64 bytes where later
+  versions allocate none.
+
+  The same rewrite takes the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children
+  and which returns a tuple with no concrete type — so a parameter set with more than 32 layers, or a
+  layer with more than 32 entries, no longer unflattens through a type-unstable path.
+
+  `parameterrange`, `length(::ParameterLayout)`, `_reshape_leaf` and the `parameter_eltype` family are
+  marked `@inline` alongside, for the same reason the in-place walks are.
+
 ## [0.2.0] — 2026-08-24
 
 ### Changed
@@ -107,6 +134,7 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 
 [#11]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/11
 [#12]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/12
+[0.2.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.1
 [0.2.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.0
 [0.1.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.0

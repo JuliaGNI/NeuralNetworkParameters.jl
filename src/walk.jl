@@ -7,7 +7,9 @@
 # optimizer primitives and the HDF5 traversal from each being their own copy of it.
 #
 # The recursions are written with `Base.tail` rather than with `map` over `keys` so that they stay
-# type stable and allocation free, which `flatten!`/`unflatten!` rely on.
+# type stable and allocation free, which `flatten!`/`unflatten!` rely on. The out-of-place `unflatten`
+# follows the same rule for the same reason, `map` having cost it a closure per nesting level per call
+# on Julia 1.10; see `_unflatten_children`.
 
 """
     mapparameters(f, ps)
