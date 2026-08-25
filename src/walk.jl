@@ -8,8 +8,9 @@
 #
 # The recursions are written with `Base.tail` rather than with `map` over `keys` so that they stay
 # type stable and allocation free, which `flatten!`/`unflatten!` rely on. The out-of-place `unflatten`
-# follows the same rule for the same reason, `map` having cost it a closure per nesting level per call
-# on Julia 1.10; see `_unflatten_children`.
+# and the `unflatten` rrule follow the same rule for the same reason: `map` over a closure cost the
+# first an allocation per leaf on Julia 1.11, and a `for` loop over `keys` cost the second a dynamic
+# dispatch per child on every version. See `_unflatten_children` and `_accumulate_named!`.
 
 """
     mapparameters(f, ps)

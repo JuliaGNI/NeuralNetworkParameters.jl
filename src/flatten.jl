@@ -179,22 +179,17 @@ are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing
 @inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
 @inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
 
-"""
-    _unflatten_children(layouts, data)
-
-Run [`unflatten`](@ref) over the children of a branch layout, in the shape the rest of this package
-walks a layout tree: `Base.tail` recursion, inlined, rather than `map` over a closure.
-
-The two are equally inferable, but `map` leaves the closure over `data` to be elided and Julia 1.10
-does not always elide it — one heap-allocated closure per nesting level per call, which
-`SymbolicNeuralNetworks` measured as most of a 2.3x allocation gap against 1.11 and later
-([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)). It
-also keeps the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children and which
-returns a tuple with no concrete type.
-
-`data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
-helper serves both.
-"""
+# `unflatten` over the children of a branch layout, in the shape the rest of this package walks a
+# layout tree: `Base.tail` recursion, inlined, rather than `map` over a closure.
+#
+# The two are equally inferable, but `map` leaves the closure over `data` to be elided and not every
+# version elides it. On Julia 1.11 the recursion halves what an `unflatten` call costs, from two heap
+# allocations per leaf to one; on 1.10 it is worth as much again on some shapes and nothing on others.
+# It also keeps the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children and
+# which returns a tuple with no concrete type.
+#
+# `data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
+# helper serves both.
 @inline _unflatten_children(::Tuple{}, _) = ()
 @inline _unflatten_children(layouts::Tuple, data) =
     (unflatten(first(layouts), data), _unflatten_children(Base.tail(layouts), data)...)

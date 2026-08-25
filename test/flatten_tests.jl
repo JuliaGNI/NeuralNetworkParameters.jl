@@ -114,6 +114,9 @@ end
     v, layout = flatten(wide)
     @test isconcretetype(only(Base.return_types(unflatten, Tuple{typeof(layout), Vector{Float64}})))
     @test unflatten(layout, v) == wide
+    # the Jacobian overload is a second set of methods over the same helper, and drops to the same
+    # fallback if it is ever written back as a `map`
+    @test isconcretetype(only(Base.return_types(unflatten, Tuple{typeof(layout), Matrix{Float64}})))
     @test unflatten(layout, reshape(v, 40, 1)).p7 == [7.0;;]
 end
 

@@ -8,28 +8,59 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 ### Fixed
 
-- **The out-of-place `unflatten` allocated a closure per nesting level on Julia 1.10.** It was the one
-  walk in the package written as `map(c -> unflatten(c, v), values(l.children))` rather than as the
+- **The out-of-place `unflatten` walked its children with `map` over a closure.** It was the one walk
+  in the package written as `map(c -> unflatten(c, v), values(l.children))` rather than as the
   `Base.tail` recursion `src/walk.jl` states the house rule to be, and which `flatten!`, `unflatten!`
   and `mapparameters` all follow. Both are equally inferable — nothing here was ever type unstable —
-  but `map` leaves the closure over the flat vector to be elided, and Julia 1.10 does not always elide
-  it.
+  but `map` leaves the closure over the flat vector to be elided, and not every version elides it
+  ([#13]).
 
-  `SymbolicNeuralNetworks` splits the result of a generated function into the shape of a parameter set
-  through this function, once per call, so the cost landed on a hot path: 800 bytes per call on 1.10
-  against 352 on 1.11 and later, which `NonlinearIntegrators` measured as 1.85x the allocations in its
-  Newton residual and had to ship a version-conditional allocation ceiling for
-  ([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)).
-  Rewritten as `_unflatten_children`, it costs 512 on 1.10 and is unchanged on 1.11, 1.12 and 1.13 —
-  what is left between the versions is Julia 1.10's `reshape`, which allocates 64 bytes where later
-  versions allocate none.
+  Bytes per call, measured from inside a function on the three-leaf set of the `flatten` docstring, and
+  per leaf on a flat set of four identical ones:
+
+  | | 1.10 | 1.11 | 1.12 | 1.13 |
+  |---|---|---|---|---|
+  | three-leaf set, before | 720 | 240 | 240 | 240 |
+  | three-leaf set, after | **400** | **112** | 240 | 240 |
+  | per leaf, before | 176 | 96 | 96 | 96 |
+  | per leaf, after | 176 | **48** | 96 | 96 |
+
+  Julia 1.11 is where it tells: the recursion halves what every leaf costs, from two heap allocations
+  to one. On 1.10 the saving depends on the shape of the set rather than on its size — the closure is
+  elided for some trees and not others — and 1.12 and 1.13 elide it throughout, so there the change is
+  neutral. It is neutral or better everywhere; no set measured costs more than it did.
 
   The same rewrite takes the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children
   and which returns a tuple with no concrete type — so a parameter set with more than 32 layers, or a
-  layer with more than 32 entries, no longer unflattens through a type-unstable path.
+  layer with more than 32 entries, no longer unflattens through a type-unstable path. This holds for
+  the `AbstractMatrix` overload set as well, which splits a Jacobian by parameter block.
 
-  `parameterrange`, `length(::ParameterLayout)`, `_reshape_leaf` and the `parameter_eltype` family are
-  marked `@inline` alongside, for the same reason the in-place walks are.
+  `SymbolicNeuralNetworks` splits the result of a generated function into the shape of a parameter set
+  through this function, once per call, which is how the cost came to be noticed
+  ([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)).
+- **The `unflatten` rrule dispatched dynamically once per child, on every reverse pass.** Its branch
+  walks read `for k in keys(l.children)` and indexed `l.children[k]`: a runtime `Symbol` into a
+  heterogeneous `NamedTuple` gives back the union of the branch's child layout types, so nothing about
+  the recursion was known at compile time. The cost climbed with the number of layers and with the
+  depth of the tree, which is exactly what a gradient step pays most often. The walks are now the same
+  `Base.tail` recursion as everything else ([#13]).
+
+  Four leaves, one to a layer, against a gradient vector that is itself 128 bytes:
+
+  | | 1.10 | 1.11 | 1.12 | 1.13 |
+  |---|---|---|---|---|
+  | before | 1664 | 1664 | 1664 | 1664 |
+  | after | **128** | **128** | **128** | **128** |
+
+  The pullback now allocates its answer and, on three of the four versions, nothing else. Grouping the
+  same leaves into layers no longer costs anything at all, where it used to multiply the bill by five.
+- `_matching_storage`, which narrows a cotangent to the storage of a multi-block structured leaf, built
+  its positional case with `ntuple` over a *runtime* length. `Base` stops inferring that past ten, so a
+  leaf whose `freeparameters` are more than ten blocks fell to a `Tuple` with no concrete type. Both of
+  its cases are recursions now ([#13]).
+- `parameterrange`, `length(::ParameterLayout)`, `_reshape_leaf` and the `parameter_eltype` family are
+  marked `@inline` alongside, for the same reason the in-place walks are. None of these moved a
+  measurement; they are consistency with the rule the walks follow, not a claimed effect ([#13]).
 
 ## [0.2.0] — 2026-08-24
 
@@ -134,7 +165,8 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 
 [#11]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/11
 [#12]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/12
-[0.2.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.1
+[#13]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/13
+[0.2.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/compare/v0.2.0...main
 [0.2.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.0
 [0.1.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.0

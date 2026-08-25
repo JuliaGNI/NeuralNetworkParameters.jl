@@ -199,7 +199,7 @@ end
 # through it. A leaf that *does* keep numbers behind a non-array interface opts in with
 # `NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))`;
 # without it `flatten` raises rather than guessing an element type for numbers it can see.
-parameter_eltype(x) = Union{}
+@inline parameter_eltype(x) = Union{}
 
 @inline _promote_eltypes(::Tuple{}) = Union{}
 @inline function _promote_eltypes(xs::Tuple)
