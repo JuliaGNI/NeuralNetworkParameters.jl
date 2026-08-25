@@ -85,9 +85,11 @@ end
     @test touched[] == 0
 end
 
-@testset "a wide branch is a parameter tree" begin
+@testset "a wide branch is a ParameterSet and a parameter tree" begin
     ps = wide_set(369)
+    @test ps isa ParameterSet
     @test isparametertree(ps)
+    @test NetworkParameters(ps) isa ParameterSet
     @test parameter_eltype(ps) == Float32
 end
 

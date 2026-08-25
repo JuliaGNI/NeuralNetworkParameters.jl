@@ -94,6 +94,20 @@ they were not.
 
 ### Added
 
+- **`ParameterSet`**, exported: `Union{NetworkParameters, NamedTuple}`, the type to dispatch on when a
+  method takes *the parameters* and does not care which of the two forms it was handed.
+
+  Every package in this ecosystem was spelling that union out inline — `AbstractNeuralNetworks` at
+  eight sites, `GeometricMachineLearning` at fifteen, `GeometricOptimizers` at sixteen — and
+  `SymbolicNeuralNetworks` had named it `EquationSet` for the equation sets that share the shape. One
+  name means a reader meets the same type in all of them.
+
+  Its docstring states the two things it is not. It is **not** `isparametertree`, which is also true of
+  a `Tuple`, because a `Tuple` is a branch the walks recurse into — what `freeparameters` returns for a
+  multi-block leaf — and never a set of parameters handed in whole. And it puts no bound on the element
+  type or the depth, so it is **not** `GeometricOptimizers.ParameterContainer{T}`, which additionally
+  requires the `NamedTuple` half to be flat and element-type-homogeneous.
+
 - `test/wide_branch_tests.jl`, which walks a 369-child branch through `flatten`/`unflatten`,
   `mapparameters` at both arities, `mapparameters!`, `foreachparameters` with and without the `nothing`
   skip, `foldparameters` and `parameter_eltype`, and pins the in-place forms at zero allocations there.
