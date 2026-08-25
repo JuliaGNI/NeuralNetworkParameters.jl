@@ -71,19 +71,13 @@ end
 
 function _accumulate!(Δv, l::NestedLayout, Δ)
     Δ === nothing && return Δv
-    nt = _cotangent_backing(Δ)
-    for k in keys(l.children)
-        _accumulate!(Δv, l.children[k], _normalized(_cotangent_get(nt, k)))
-    end
+    _accumulate_named!(Δv, values(l.children), keys(l.children), _cotangent_backing(Δ))
     Δv
 end
 
 function _accumulate!(Δv, l::TupleLayout, Δ)
     Δ === nothing && return Δv
-    t = _cotangent_backing(Δ)
-    for i in eachindex(l.children)
-        _accumulate!(Δv, l.children[i], _normalized(_cotangent_get(t, i)))
-    end
+    _accumulate_positional!(Δv, l.children, _cotangent_backing(Δ))
     Δv
 end
 
@@ -96,6 +90,26 @@ function _accumulate!(Δv, l::LeafLayout, Δ)
     Δ === nothing && return Δv
     _add_leaf_cotangent!(Δv, l, Δ)
     Δv
+end
+
+# The branch walks, in the `Base.tail` shape the rest of the package walks a layout in. A `for` loop
+# over `keys(l.children)` reads the same, but it indexes a heterogeneous `NamedTuple` with a runtime
+# `Symbol`: the child layout comes back as the union of the branch's child types, so `_accumulate!` is
+# dispatched dynamically once per child on every reverse pass. The keys are a compile-time constant
+# and the recursion keeps them one, which is the same reason `_unflatten_children` exists.
+@inline _accumulate_named!(Δv, ::Tuple{}, ::Tuple{}, Δ) = nothing
+@inline function _accumulate_named!(Δv, ls::Tuple, ks::Tuple, Δ)
+    _accumulate!(Δv, first(ls), _normalized(_cotangent_get(Δ, first(ks))))
+    _accumulate_named!(Δv, Base.tail(ls), Base.tail(ks), Δ)
+end
+
+# The positional walk consumes the cotangent alongside the layout rather than indexing into it, so it
+# needs no index to be constant. `_cotangent_head`/`_cotangent_tail` carry the two cases a position
+# can be in.
+@inline _accumulate_positional!(Δv, ::Tuple{}, Δ) = nothing
+@inline function _accumulate_positional!(Δv, ls::Tuple, Δ)
+    _accumulate!(Δv, first(ls), _normalized(_cotangent_head(Δ)))
+    _accumulate_positional!(Δv, Base.tail(ls), _cotangent_tail(Δ))
 end
 
 _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::Number) = (Δv[first(l.range)] += Δ; nothing)
@@ -132,8 +146,17 @@ _cotangent_backing(Δ) = Δ
 
 # Anything the cotangent is silent about becomes `nothing`, i.e. a structural zero.
 _cotangent_get(nt::NamedTuple, k::Symbol) = haskey(nt, k) ? nt[k] : nothing
-_cotangent_get(t::Tuple, i::Integer) = i <= length(t) ? t[i] : nothing
 _cotangent_get(x, _) = x
+
+# The same rule, read one position at a time: a `Tuple` cotangent shorter than the layout runs out
+# into structural zeros, and a cotangent that is not a tuple at all stands in for every position of
+# the branch — which is what a `Tangent` for a leaf, handed to a branch, means.
+@inline _cotangent_head(::Tuple{}) = nothing
+@inline _cotangent_tail(::Tuple{}) = ()
+@inline _cotangent_head(Δ::Tuple) = first(Δ)
+@inline _cotangent_tail(Δ::Tuple) = Base.tail(Δ)
+@inline _cotangent_head(Δ) = Δ
+@inline _cotangent_tail(Δ) = Δ
 
 # The cotangent of a structured leaf: the same structured type if the reverse pass kept it, otherwise
 # whatever tangent stood in for it, reduced to its storage.
@@ -159,11 +182,18 @@ function _storage_field(prototype, storage)
     nothing
 end
 
-# `freeparameters` of the prototype tells us which of the tangent's fields are the storage.
-function _matching_storage(storage::NamedTuple, nt::NamedTuple)
-    NamedTuple{keys(storage)}(map(k -> _cotangent_get(nt, k), keys(storage)))
-end
-function _matching_storage(storage::Tuple, nt::NamedTuple)
-    ntuple(i -> _cotangent_get(values(nt), i), length(storage))
-end
+# `freeparameters` of the prototype tells us which of the tangent's fields are the storage. Both cases
+# recurse rather than closing over `nt`, for the reason `_unflatten_children` does — and the positional
+# one used to be an `ntuple` over a *runtime* length, which stops being inferable past ten blocks.
+_matching_storage(storage::NamedTuple, nt::NamedTuple) =
+    NamedTuple{keys(storage)}(_matching_named(keys(storage), nt))
+_matching_storage(storage::Tuple, nt::NamedTuple) = _matching_positional(storage, values(nt))
 _matching_storage(_, nt::NamedTuple) = nt
+
+@inline _matching_named(::Tuple{}, _) = ()
+@inline _matching_named(ks::Tuple, nt) =
+    (_cotangent_get(nt, first(ks)), _matching_named(Base.tail(ks), nt)...)
+
+@inline _matching_positional(::Tuple{}, _) = ()
+@inline _matching_positional(storage::Tuple, Δ) =
+    (_cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)

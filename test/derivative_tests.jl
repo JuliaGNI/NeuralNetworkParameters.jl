@@ -110,3 +110,56 @@ end
     @test NeuralNetworkParameters.parameter_eltype((a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
           Float32
 end
+
+# The pullback walks the layout against a cotangent whose shape it cannot know, and it used to do so
+# with `for k in keys(l.children)`: indexing a heterogeneous `NamedTuple` with a runtime `Symbol`
+# yields the union of the branch's child layout types, so `_accumulate!` was dispatched dynamically
+# once per child. The cost grew with the number of layers — on Julia 1.13, 5312 bytes for an
+# eight-layer set whose gradient vector is 192 — and none of the value tests above could see it.
+_pullback_allocs(pb, Δ) = @allocated pb(Δ)
+
+@testset "the pullback does not pay for the depth of the tree" begin
+    # the same four leaves, once flat and once one to a layer. The walk is over layouts known at
+    # compile time, so the layering cannot show up in the bill. Before it was written this way the two
+    # cost 320 and 1664 bytes on Julia 1.10, and 1088 and 1664 on 1.13, against a 128-byte answer —
+    # the gap is the dynamic dispatch a runtime-`Symbol` lookup into `l.children` forced at every
+    # child. (Both figures now sit at the answer's own cost on 1.10, 1.12 and 1.13; 1.11 adds a fixed
+    # 32 bytes to either, which is why the two are compared with each other and not with `zero`.)
+    L = [1.0, 2.0]
+    function _cost(p)
+        w, l = flatten(p)
+        _, pb = ChainRulesCore.rrule(unflatten, l, w)
+        Δ = unflatten(l, w)
+        _pullback_allocs(pb, Δ)                       # warm up the call and the measurement
+        _pullback_allocs(pb, Δ)
+    end
+    flat = NetworkParameters((a = L, b = L, c = L, d = L))
+    layered = NetworkParameters((L1 = (a = L,), L2 = (b = L,), L3 = (c = L,), L4 = (d = L,)))
+    @test _cost(layered) == _cost(flat)
+end
+
+@testset "a tuple branch reads a cotangent shorter than itself" begin
+    # `_cotangent_head`/`_cotangent_tail` replaced an index into the cotangent tuple; a reverse pass
+    # that filled only the leading positions still has to leave the rest as structural zeros
+    tp = NetworkParameters((t = ([1.0, 2.0], [3.0], [4.0]),))
+    tv, tl = flatten(tp)
+    acc(Δ) = (d = zero(tv); NeuralNetworkParameters._accumulate_cotangent!(d, tl, Δ); d)
+    @test acc((t = ([1.0, 1.0], [1.0], [1.0]),)) == [1.0, 1.0, 1.0, 1.0]
+    @test acc((t = ([1.0, 1.0],),)) == [1.0, 1.0, 0.0, 0.0]      # runs out into zeros
+    @test acc((t = (),)) == [0.0, 0.0, 0.0, 0.0]
+    @test Zygote.gradient(w -> sum(unflatten(tl, w).t[2]), tv)[1] == [0.0, 0.0, 1.0, 0.0]
+end
+
+@testset "storage in more than ten blocks is matched by name and by position" begin
+    # `_matching_storage` used to reach for its positional case with `ntuple` over a runtime length,
+    # which Base stops inferring past ten
+    storage = ntuple(i -> [Float64(i)], 12)
+    backing = NamedTuple{ntuple(i -> Symbol(:b, i), 12)}(storage)
+    @test NeuralNetworkParameters._matching_storage(storage, backing) === storage
+    @test isconcretetype(only(Base.return_types(NeuralNetworkParameters._matching_storage,
+        Tuple{typeof(storage), typeof(backing)})))
+    # a backing that stops short leaves the remaining blocks as structural zeros
+    short = NamedTuple{ntuple(i -> Symbol(:b, i), 3)}(ntuple(i -> [Float64(i)], 3))
+    @test NeuralNetworkParameters._matching_storage(storage, short) ===
+          (short.b1, short.b2, short.b3, ntuple(_ -> nothing, 9)...)
+end

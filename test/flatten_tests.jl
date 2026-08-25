@@ -101,6 +101,25 @@ _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
     @test _unflatten_allocs(dest, layout, v) == 0
 end
 
+# `unflatten` used to be the one walk here written as `map` over a closure rather than as the
+# `Base.tail` recursion the rest of the package uses. Two things came of that, and this pins both.
+# `map` unrolls a tuple only up to 32 elements and drops to `Base`'s `Any32` fallback beyond it, which
+# returns a tuple with no concrete type; and the closure over the flat vector is left to be elided,
+# which Julia 1.11 and later do and 1.10 does not — one heap allocation per nesting level per call, on
+# a path `SymbolicNeuralNetworks` runs once per evaluation of a generated function
+# ([SymbolicNeuralNetworks#55](https://github.com/JuliaGNI/SymbolicNeuralNetworks.jl/issues/55)).
+@testset "unflatten stays inferable past 32 children" begin
+    keys40 = ntuple(i -> Symbol(:p, i), 40)
+    wide = NetworkParameters(NamedTuple{keys40}(ntuple(i -> [Float64(i)], 40)))
+    v, layout = flatten(wide)
+    @test isconcretetype(only(Base.return_types(unflatten, Tuple{typeof(layout), Vector{Float64}})))
+    @test unflatten(layout, v) == wide
+    # the Jacobian overload is a second set of methods over the same helper, and drops to the same
+    # fallback if it is ever written back as a `map`
+    @test isconcretetype(only(Base.return_types(unflatten, Tuple{typeof(layout), Matrix{Float64}})))
+    @test unflatten(layout, reshape(v, 40, 1)).p7 == [7.0;;]
+end
+
 @testset "length mismatches are caught" begin
     ps = NetworkParameters((a = [1.0, 2.0],))
     _, layout = flatten(ps)
