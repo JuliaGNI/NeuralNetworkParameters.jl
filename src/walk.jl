@@ -6,11 +6,27 @@
 # structured types exist — is what keeps `changebackend`, `map_to_cpu`, `_statify`, the elementwise
 # optimizer primitives and the HDF5 traversal from each being their own copy of it.
 #
-# The recursions are written with `Base.tail` rather than with `map` over `keys` so that they stay
-# type stable and allocation free, which `flatten!`/`unflatten!` rely on. The out-of-place `unflatten`
-# and the `unflatten` rrule follow the same rule for the same reason: `map` over a closure cost the
-# first an allocation per leaf on Julia 1.11, and a `for` loop over `keys` cost the second a dynamic
-# dispatch per child on every version. See `_unflatten_children` and `_accumulate_named!`.
+# The walk *down* the tree — `mapparameters` and friends dispatching on `NetworkParameters`,
+# `NamedTuple`, `Tuple` or a leaf — is ordinary multiple dispatch. The walk *across* the children of
+# one branch is not, and it is where the care goes. Neither `map` over `keys` nor a `for` loop will do:
+# `map` over a closure cost the out-of-place `unflatten` an allocation per leaf on Julia 1.11, and a
+# loop over `keys` indexes a heterogeneous tuple at a runtime `i`, which is type-unstable and costs a
+# dynamic dispatch — and a boxed allocation — per child. `flatten!`/`unflatten!` are allocation-free
+# only because neither happens.
+#
+# These across-children walks used to be `@inline`d `Base.tail` chains, which met that bar and
+# introduced a different problem: `Base.tail` produces a *new tuple type at every level*, so a branch
+# with `k` children costs `k` specialisations whose argument types are each `O(k)` long, and inference
+# on that grows as `k³`. Measured, `flatten` on a flat set: 0.17 s at 32 children, 2.2 s at 64, 17.6 s
+# at 128, and past ten minutes at the 369 of the MNIST transformer in GMLDatasets.jl — which is a real
+# parameter set, not a synthetic worst case. Dropping the `@inline` does not help; it makes the same
+# shape slower still (3.2 s at 64) *and* costs 187 808 bytes, because the chain is what kept the
+# per-leaf `copyto!` statically dispatched.
+#
+# So `_children_across` writes the flat body out instead: one `@generated` expansion per branch shape,
+# `k` statements indexing `xs[1] … xs[k]` at *literal* indices. One specialisation instead of `k`, no
+# new tuple types at all, every index inferred at a constant, and the same straight-line code the
+# chain used to inline down to. See open issue D9 in the CHANGELOG for the numbers before and after.
 
 """
     mapparameters(f, ps)
@@ -61,7 +77,7 @@ mapparameters(+, a, c).L1.b
 @inline function mapparameters(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     _check_keys(keys(ps), nts)
-    NamedTuple{keys(ps)}(_map_zip(mapparameters, f, values(ps), map(values, nts)...))
+    NamedTuple{keys(ps)}(_map_zip(mapparameters, f, ps, nts...))
 end
 
 @inline mapparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
@@ -101,7 +117,7 @@ mapstorage(x -> x ./ 2, ps).L1.W
 @inline function mapstorage(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     _check_keys(keys(ps), nts)
-    NamedTuple{keys(ps)}(_map_zip(mapstorage, f, values(ps), map(values, nts)...))
+    NamedTuple{keys(ps)}(_map_zip(mapstorage, f, ps, nts...))
 end
 
 @inline mapstorage(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
@@ -127,7 +143,7 @@ See [`mapparameters!`](@ref) for the in-place variant that returns its destinati
 @inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
     nt = _as_namedtuple(ps)
-    _foreach_zip(f, freeparameters, values(nt), map(r -> _values_for(r, keys(nt)), rest)...)
+    _foreach_zip(f, freeparameters, nt, map(r -> _values_for(r, keys(nt)), rest)...)
     nothing
 end
 
@@ -171,7 +187,7 @@ end
 @inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
     nt = _as_namedtuple(ps)
-    _foreach_zip(f, _storage_recurse, values(nt), map(r -> _values_for(r, keys(nt)), rest)...)
+    _foreach_zip(f, _storage_recurse, nt, map(r -> _values_for(r, keys(nt)), rest)...)
     nothing
 end
 
@@ -218,13 +234,19 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 """
 @inline foldparameters(op, init, ps::NetworkParameters) = foldparameters(op, init, params(ps))
 
-@inline foldparameters(op, init, ps::Union{NamedTuple, Tuple}) = _fold_children(op, init, values(ps))
+@inline foldparameters(op, init, ps::Union{NamedTuple, Tuple}) = _fold_children(op, init, ps)
 
 @inline foldparameters(op, init, x) = op(init, x)
 
-@inline _fold_children(op, acc, ::Tuple{}) = acc
-@inline _fold_children(op, acc, xs::Tuple) = _fold_children(
-    op, foldparameters(op, acc, first(xs)), Base.tail(xs))
+# A *left* fold, and the expansion keeps it one: `op` is the caller's and need not be associative,
+# so the nesting below is built inside out rather than halved.
+@generated function _fold_children(op, acc, xs)
+    expr = :acc
+    for i in 1:fieldcount(xs)
+        expr = :(foldparameters(op, $expr, getfield(xs, $i)))
+    end
+    expr
+end
 
 # ---------------------------------------------------------------------------------------------------
 # helpers
@@ -243,26 +265,30 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 @inline _tuple_for(::Nothing, n::Int) = ntuple(_ -> nothing, n)
 @inline _tuple_for(x, ::Int) = x
 
-@inline _anynothing(::Tuple{}) = false
-@inline _anynothing(t::Tuple) = first(t) === nothing || _anynothing(Base.tail(t))
-
-@inline _map_zip(recurse, f, ::Tuple{}) = ()
-@inline _map_zip(recurse, f, xs::Tuple) = (
-    recurse(f, first(xs)), _map_zip(recurse, f, Base.tail(xs))...)
-@inline _map_zip(recurse, f, ::Tuple{}, rest::Tuple{}...) = ()
-@inline _map_zip(recurse, f, xs::Tuple, rest::Tuple...) = (
-    recurse(f, first(xs), map(first, rest)...),
-    _map_zip(recurse, f, Base.tail(xs), map(Base.tail, rest)...)...)
-
-@inline _foreach_zip(f, kind, ::Tuple{}) = nothing
-@inline function _foreach_zip(f, kind, xs::Tuple)
-    _foreach_step(f, kind, first(xs))
-    _foreach_zip(f, kind, Base.tail(xs))
+# `||` and not `any`, so it still short-circuits: the whole point is not to look at the rest once a
+# `nothing` has been found.
+@generated function _anynothing(t::Tuple)
+    fieldcount(t) == 0 && return :(false)
+    tests = [:(getfield(t, $i) === nothing) for i in 1:fieldcount(t)]
+    foldr((a, b) -> :($a || $b), tests)
 end
-@inline _foreach_zip(f, kind, ::Tuple{}, rest::Tuple{}...) = nothing
-@inline function _foreach_zip(f, kind, xs::Tuple, rest::Tuple...)
-    _foreach_step(f, kind, first(xs), map(first, rest)...)
-    _foreach_zip(f, kind, Base.tail(xs), map(Base.tail, rest)...)
+
+# One method for both arities: with no `rest` the inner splat is empty and this is the plain map.
+@generated function _map_zip(recurse, f, xs, rest...)
+    n = _children_arity(xs, rest...)
+    calls = [Expr(:call, :recurse, :f, :(getfield(xs, $i)),
+                  (:(getfield(rest[$j], $i)) for j in 1:length(rest))...) for i in 1:n]
+    :(($(calls...),))
+end
+
+@generated function _foreach_zip(f, kind, xs, rest...)
+    n = _children_arity(xs, rest...)
+    calls = [Expr(:call, :_foreach_step, :f, :kind, :(getfield(xs, $i)),
+                  (:(getfield(rest[$j], $i)) for j in 1:length(rest))...) for i in 1:n]
+    quote
+        $(calls...)
+        nothing
+    end
 end
 
 @inline _foreach_step(f, ::typeof(freeparameters), args::Vararg{
@@ -277,4 +303,17 @@ end
         throw(ArgumentError(string("parameter sets have different keys: ", ks, " and ", keys(other))))
     end
     _check_keys(ks, Base.tail(nts))
+end
+
+# The arity check the `Base.tail` chains used to get for free, by running out of `Tuple{}` methods.
+# Raised from the generated bodies, so it is a clear error at specialisation time rather than a
+# `MethodError` naming a tuple type nobody wrote.
+function _children_arity(xs, rest...)
+    n = fieldcount(xs)
+    for (j, r) in enumerate(rest)
+        fieldcount(r) == n || throw(ArgumentError(string(
+            "parameter sets walked together must have the same number of children at every level; ",
+            "got ", n, " and, in argument ", j + 1, ", ", fieldcount(r), ".")))
+    end
+    n
 end

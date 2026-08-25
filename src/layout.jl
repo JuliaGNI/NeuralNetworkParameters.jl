@@ -128,7 +128,7 @@ function _layout(ps::NetworkParameters, offset::Int)
 end
 
 function _layout(ps::NamedTuple, offset::Int)
-    children, off = _layout_children(values(ps), offset)
+    children, off = _layout_children(ps, offset)
     NestedLayout(NamedTuple{keys(ps)}(children), (offset + 1):off), off
 end
 
@@ -148,12 +148,24 @@ function _layout(x, offset::Int)
     end
 end
 
-_layout_children(::Tuple{}, offset::Int) = ((), offset)
-
-function _layout_children(xs::Tuple, offset::Int)
-    child, off = _layout(first(xs), offset)
-    rest, final = _layout_children(Base.tail(xs), off)
-    (child, rest...), final
+# Written out for the reason the head of `walk.jl` gives, and threading the offset left to right, as
+# the recursion this replaces did: the ranges a layout hands out are the order `flatten` writes in.
+# This one was never `@inline`d, so it was the cheapest of the walks to begin with -- 0.04 s where
+# `flatten` took 17.6 s at the same 128 children -- but it paid the same `k` specialisations, and it
+# is the only walk that runs even when nothing is flattened.
+@generated function _layout_children(xs, offset::Int)
+    n = fieldcount(xs)
+    n == 0 && return :(((), offset))
+    body = [:((child_1, off_1) = _layout(getfield(xs, 1), offset))]
+    for i in 2:n
+        push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
+            _layout(getfield(xs, $i), $(Symbol(:off_, i - 1)))))
+    end
+    children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
+    quote
+        $(body...)
+        $children, $(Symbol(:off_, n))
+    end
 end
 
 _leafsize(x::AbstractArray) = size(x)

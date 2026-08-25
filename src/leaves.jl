@@ -201,7 +201,13 @@ end
 # without it `flatten` raises rather than guessing an element type for numbers it can see.
 @inline parameter_eltype(x) = Union{}
 
-@inline _promote_eltypes(::Tuple{}) = Union{}
-@inline function _promote_eltypes(xs::Tuple)
-    promote_type(parameter_eltype(first(xs)), _promote_eltypes(Base.tail(xs)))
+# Written out rather than recursed for the reason the head of `walk.jl` gives: a `Base.tail` chain
+# costs one specialisation per child, and this one is on `flatten`'s path.
+@generated function _promote_eltypes(xs::Tuple)
+    fieldcount(xs) == 0 && return :(Union{})
+    expr = :(parameter_eltype(xs[1]))
+    for i in 2:fieldcount(xs)
+        expr = :(promote_type($expr, parameter_eltype(xs[$i])))
+    end
+    expr
 end

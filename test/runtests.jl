@@ -18,6 +18,9 @@ end
 @safetestset "Flat parameters           " begin
     include("flat_parameters_tests.jl")
 end
+@safetestset "Wide branches             " begin
+    include("wide_branch_tests.jl")
+end
 @safetestset "Derivatives               " begin
     include("derivative_tests.jl")
 end

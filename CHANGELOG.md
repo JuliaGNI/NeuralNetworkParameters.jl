@@ -4,6 +4,110 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-08-25
+
+**A branch with many children is usable.** 0.2.1 finished making the walks type stable and allocation
+free; this release makes them *compilable* on a branch wider than a couple of dozen children, which
+they were not.
+
+### Fixed
+
+- **Every walk across the children of one branch cost one specialisation per child.** The walk *down*
+  the tree is ordinary dispatch and was never the problem. The walk *across* was an `@inline`d
+  `Base.tail` chain, and `Base.tail` yields a new tuple type at every level — so a branch of `k`
+  children produced `k` specialisations whose argument types were each `O(k)` long, and inference on
+  that grew as `k³`.
+
+  Nine walks were written this way and all nine are now written out instead, as a `@generated` flat
+  body of `k` statements reading `getfield(xs, 1) … getfield(xs, k)` at *literal* indices: one
+  specialisation per branch shape rather than `k`, no new tuple types at all, every index inferred at a
+  constant, and the same straight-line code the chain used to inline down to. They are
+  `_flatten_children!`, `_unflatten_children`, `_unflatten_children!` (`src/flatten.jl`), `_map_zip`,
+  `_foreach_zip`, `_fold_children`, `_anynothing` (`src/walk.jl`), `_promote_eltypes`
+  (`src/leaves.jl`) and `_layout_children` (`src/layout.jl`).
+
+  First-call time, which is compilation plus a negligible run, on a flat `NamedTuple` of `k` leaves
+  (Julia 1.13, `scripts/wide_branch_cost.jl`):
+
+  | children | `flatten`, 0.2.1 | `flatten`, 0.2.2 | `mapparameters(zero, ·)` cold, 0.2.1 | 0.2.2 |
+  |---|---|---|---|---|
+  | 32 | 0.17 s | 0.09 s | 0.07 s | 0.00 s |
+  | 64 | 2.16 s | 0.23 s | 1.32 s | 0.00 s |
+  | 128 | 17.57 s | **0.56 s** | 7.39 s | 0.00 s |
+  | 369 | not run to completion | **2.05 s** | not run to completion | 0.00 s |
+
+  `map(zero, ·)` is unchanged throughout at 0.01 s, and is in the harness as the floor: it is what
+  `Base` costs on the same branch, and what a consumer that wrote its own walk over `map` to get around
+  this was paying instead.
+
+  369 is the width that made this worth fixing rather than noting: it is the parameter set of the MNIST
+  transformer in `scripts/geometric_optimizers/mnist.jl` of
+  [GMLDatasets.jl](https://github.com/JuliaGNI/GMLDatasets.jl) — 3·7·16 attention projections, 2·16
+  ResNet parameters and one classification weight, in one flat `NamedTuple` — written against this
+  package alone. `flatten` is on the path of every `GeometricOptimizers.GradientAutodiff`, so that
+  network could not be optimized through this package at all.
+
+  Two answers that look obvious are both wrong, and the harness above is what says so. **Dropping the
+  `@inline`** leaves the `k` specialisations exactly where they were: the same 64-child set went from
+  2.16 s to 3.22 s, *and* began allocating, because the inlining is what had kept the per-leaf
+  `copyto!` statically dispatched. **A `for` loop over the children**, which is what `Base.map` falls
+  back to past 32 fields, indexes a heterogeneous tuple at a runtime `i` — type-unstable, so a dynamic
+  dispatch and a boxed allocation per child, and the end of the property 0.2.1 exists to provide.
+
+  Reported from the review of [GeometricOptimizers#68], which hit this when widening its elementwise
+  primitives to a parameter container and had to write its own `map`-based walk to get around it.
+
+- **`flatten!` and `unflatten!` allocated on a branch of more than about forty children**, against the
+  guarantee in their own docstrings. Two temporary tuples were materialised per branch — `values(ps)`
+  and `values(l.children)` — which is free while a branch is narrow enough to keep in registers and is
+  not beyond that. Measured on the same flat sets, bytes per call from inside a function:
+
+  | children | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|
+  | 0.2.1 | 0 | 81 488 | 187 808 | not reached | not reached |
+  | 0.2.2 | 0 | **0** | **0** | **0** | **0** |
+
+  The walks index the branch in place with `getfield` now and take no `values` at all, so nothing is
+  materialised on the way in. This was found while fixing the entry above and is a separate defect:
+  narrowing the branch made it disappear, which is why the docstrings' claim had held up in testing.
+
+- **The reverse pass had the same two defects**, on the walk that turns a cotangent in the shape of the
+  parameters back into a flat gradient. `_accumulate_named!` was a `Base.tail` chain over
+  `values(l.children)` and `keys(l.children)`; it is written out now, with the branch's keys spliced in
+  as *literal* `Symbol`s — which is what keeps `_cotangent_get`'s `haskey` a compile-time question, the
+  property the chain had been relying on constant propagation for. `_matching_named` goes with it.
+
+  Bytes per pullback call, on the same flat sets:
+
+  | children | 16 | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|---|
+  | 0.2.1 | 320 | 576 | 70 592 | 161 504 | not reached | not reached |
+  | 0.2.2 | 320 | 576 | **848** | **1 120** | **2 112** | **6 208** |
+
+  Identical up to 32 children and 144× better at 64, which is the signature of the same cliff: below it
+  the temporary tuples stay in registers, above it they do not.
+
+  The two *positional* walks — `_accumulate_positional!` and `_matching_positional` — are deliberately
+  left as chains, and the comment beside them now says why: their length is the number of blocks of a
+  single leaf, two for a `StiefelLieAlgHorMatrix` and one for a Grassmann lift, so they are never wide
+  the way a branch of layers is.
+
+### Added
+
+- `test/wide_branch_tests.jl`, which walks a 369-child branch through `flatten`/`unflatten`,
+  `mapparameters` at both arities, `mapparameters!`, `foreachparameters` with and without the `nothing`
+  skip, `foldparameters` and `parameter_eltype`, and pins the in-place forms at zero allocations there.
+  It also covers 48, either side of the 32 fields `Base` unrolls a tuple up to.
+
+  It asserts the properties and not the timings — a wall-clock bound would be a flake on a loaded
+  machine — so the regression test is that the file *completes*, which before this release it did not.
+  It costs the suite about 40 s, all of it compilation at the wide width, and that is the honest price
+  of covering the width a consumer actually has.
+
+- `scripts/wide_branch_cost.jl`, the harness behind both tables above.
+
+[GeometricOptimizers#68]: https://github.com/JuliaGNI/GeometricOptimizers.jl/pull/68
+
 ## [0.2.1] — 2026-08-25
 
 ### Fixed
