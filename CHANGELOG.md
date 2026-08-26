@@ -4,6 +4,80 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-08-26
+
+**The cost of a wrapped parameter set was one unused type parameter.** 0.2.2 made a wide branch
+compilable and left one shape standing that was not: `parameterlayout` on a 369-leaf set cost 1.35 s as
+a bare `NamedTuple` and 13.50 s inside a `NetworkParameters`, and at 768 leaves 2.76 s against 86.88 s.
+The gap was read as a cost of the composition in `_layout(::NetworkParameters, ::Int)`, and issue #16
+read it as a cost of *nesting*. It was neither, and the note in `src/layout.jl` that argued the first
+of those is corrected here rather than released — it was written after the 0.2.2 bump and this is its
+first release.
+
+### Removed
+
+- **`LeafLayout` no longer carries a `prototype`.** The field was written at construction and read
+  nowhere: a `LeafLayout` is by construction the case where `freeparameters(x) === x`, so `rebuild` on
+  it is the identity and is never called. The two prototypes the package does read are both on
+  `WrappedLayout`, where unflattening genuinely rebuilds against one. The struct is now
+  `LeafLayout{N}` over `range` and `size`, which is what every method dispatching on it already read
+  and what `==` already compared.
+
+  The layouts are not exported and are built by `parameterlayout` rather than by hand, which is why
+  this is a patch. A caller who did construct one directly has to drop the third argument:
+  `LeafLayout(range, size, prototype)` becomes `LeafLayout(range, size)`. Nothing in
+  `AbstractNeuralNetworks`, `SymbolicNeuralNetworks`, `GeometricOptimizers` or
+  `GeometricMachineLearning` does — they dispatch on the bare type and read `size`.
+
+  A layout also no longer holds a live reference to each leaf array, so keeping one no longer keeps the
+  parameter set it was built from alive. `Base.summarysize` of the layout of a one-leaf set is 48 bytes
+  whether that leaf is 2 × 2 or 1000 × 1000.
+
+### Fixed
+
+- **`parameterlayout` on a `NetworkParameters` costs what it costs on the `NamedTuple` inside it.** The
+  type parameter above was the leaf's concrete array type, so it went into the layout type of every
+  branch above that leaf — 1849 nodes in the type tree of a 369-leaf wrapped layout, against 742
+  without it. `_layout(::NetworkParameters, ::Int)` is where a caller paid for that, because it infers
+  through the child walk's whole return type to reach `ParametersLayout(inner)`, and inference on such a
+  type grows faster than the type does: 2.5 times the type was 13 times the time.
+
+  First call, Julia 1.11, one process per row, `scripts/leaf_layout_cost.jl`:
+
+  | `parameterlayout` on | 0.2.2 | 0.2.3 | type nodes |
+  |---|---|---|---|
+  | 369 leaves, bare `NamedTuple` | 1.35 s | 1.04 s | 1848 → 741 |
+  | 369 leaves, in a `NetworkParameters` | 13.40 s | **1.05 s** | 1849 → 742 |
+  | 768 leaves, bare | 2.77 s | 3.07 s | 3843 → 1539 |
+  | 768 leaves, in a `NetworkParameters` | 87.77 s | **3.01 s** | 3844 → 1540 |
+  | 16 × 24 nested, bare | 1.46 s | 0.85 s | 1971 → 819 |
+  | 16 × 24 nested, in a `NetworkParameters` | 14.00 s | **0.84 s** | 1972 → 820 |
+
+  **The bare column is where to look, and it does not improve** — at 768 leaves it is a shade slower,
+  2.77 s against 3.07 s, and 2.76 s against 2.99 s on a second run, which is the run-to-run spread of a
+  single cold measurement rather than a regression. The type shrinks by 2.5× in that column too, and
+  buys nothing there. What was expensive was never the walk; it was what a caller had to infer through
+  to wrap the walk's result, and only the wrapped column has such a caller.
+
+  Neither the width nor the nesting drives it either: 768 flat leaves now cost less than half what 369
+  wrapped ones used to, and 384 leaves in 16 branches cost slightly less than 369 in one.
+
+  `flatten` improves with it, 14.38 s to 3.61 s on the bare 369 set, and the whole path —
+  `parameterlayout`, then `flatten`, then `unflatten` — goes from 21.90 s to **8.64 s** on the wrapped
+  one. Those and the allocation figures are `scripts/wide_branch_cost.jl`, whose 24 rows all still read
+  zero; 0.2.1's guarantees are the reason that had to be checked rather than assumed.
+
+  Julia 1.11, 1.12 and 1.13 now agree at 1.05 s, 1.13 s and 1.03 s on the wrapped 369 set. The compat
+  floor used to be the version that behaved differently, and the note in `src/layout.jl` that called
+  that "a characteristic of the compat floor and not of the walk" was wrong: it was a characteristic of
+  the layout type, which 1.12 and 1.13 were better at absorbing.
+
+  Issue #15 filed this as hygiene and said explicitly that it was not the cause of the nested-layout
+  compile cost, on the evidence that alternating `Matrix`/`Vector` leaves cost 11.32 s against 13.9 s
+  homogeneous. That measurement is sound and its conclusion — that leaf *diversity* is not the driver —
+  still holds. It compared two sets under the old layout type, though, and never compared the layout
+  type with and without the parameter, which is where the 13× was.
+
 ## [0.2.2] — 2026-08-25
 
 **A branch with many children is usable.** 0.2.1 finished making the walks type stable and allocation

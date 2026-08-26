@@ -39,6 +39,15 @@ end
     @test layout.inner.children.L1.children.b.size == (1,)
 end
 
+@testset "a leaf layout is the shape, not the leaf" begin
+    @test fieldnames(LeafLayout) == (:range, :size)
+    # leaves that differ only in what they hold share one layout type
+    w64 = parameterlayout(NetworkParameters((W = [1.0 2.0],))).inner.children.W
+    w32 = parameterlayout(NetworkParameters((W = Float32[1.0 2.0],))).inner.children.W
+    @test typeof(w64) === typeof(w32)
+    @test w64 == w32
+end
+
 @testset "scalar and empty leaves" begin
     l = parameterlayout(NetworkParameters((a = 1.5, b = Float64[], c = [2.0 3.0])))
     @test length(l) == 3
