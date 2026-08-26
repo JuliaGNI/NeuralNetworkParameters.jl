@@ -1,17 +1,18 @@
 # NeuralNetworkParameters.jl — analysis and plan
 
-Analysis last revised 2026-08-26, against these working trees. Every version in the table is a
-*branch*, not a release: the whole family moves in one wave and only this package's dependency,
-`ChainRulesCore`, is outside it.
+Analysis last revised 2026-08-26, against these working trees. The whole family moves in one wave and
+only this package's dependency, `ChainRulesCore`, is outside it. Two rows have landed on `main` since
+the wave began — this package's 0.2.3 and `GeometricOptimizers`' 0.6.0 — and the rest are still
+branches, so read the third column before quoting a version as released.
 
 | package | version | branch |
 |---|---|---|
-| `NeuralNetworkParameters` | 0.2.2 | this repository, `fix-d9-wide-branch-compile-cost` |
+| `NeuralNetworkParameters` | 0.2.3 | this repository, `main` |
 | `GeometricBase` | 0.14.9 | `l2norm-over-any-array-and-julia-1.11` |
 | `SimpleSolvers` | 0.13.1 | `retire-the-1.10-getrf-fallback` |
 | `AbstractNeuralNetworks` | 0.7.2 | `adopt-parameterset` |
 | `SymbolicNeuralNetworks` | 0.7.1 | `adopt-parameterset` |
-| `GeometricOptimizers` | 0.6.0 | `preallocate-the-flat-buffers` (on `widen-the-primitives-…`) |
+| `GeometricOptimizers` | 0.6.0 | `main` (#68 and #69 merged) |
 | `GeometricMachineLearning` | 0.6.1 | `adopt-parameterset` |
 | `NonlinearIntegrators` | 0.4.2 | `julia-1.11-and-geometricoptimizers-0.6` |
 | `GMLDatasets` | 0.1.0 | `repair-the-mnist-scripts-against-geometricoptimizers-0.5` |
@@ -453,15 +454,45 @@ exactly where `T` also appears elsewhere in the signature, beside a `Matrix{T}` 
 wrong type everywhere else. The sixteen sites that had to fall back to the inline union are the
 measurement of that, and they take `ParameterSet` now.
 
-**The remainder, and it is small.** `src/parameter_walks.jl` still holds `_mapleaves`, written there
-because `mapparameters` could not be compiled on a wide-flat set (D12). That is fixed, so the file can
-go; the one question left is that `_as_walkable` has a catch-all where `_as_namedtuple` does not, so a
-tree zipped against something that is neither a branch nor `nothing` at that level walks there and
-raises here. Nothing in GO does that. The in-place half is already `foreachparameters`.
+**There is no remainder. Three things this section listed as outstanding had already been done**, all
+three in GO commit `b4c710c`, which landed inside #69 rather than #68 — which is why reading the two
+pull request bodies does not find them:
 
-Also still open and not a parameter-container matter: `l2norm(::AbstractMatrix)` and
-`l2norm(::AbstractFloat)` are piracy on *Base* types and belong upstream in `GeometricBase`. No
-container fixes them, and GO's own comment says so.
+- **`src/parameter_walks.jl` is deleted** and `_mapleaves`/`_mapleaves!` are `mapparameters`/
+  `mapparameters!` at 44 call sites. This section said the file "can go" once D12 was fixed; it went.
+- **The `_as_walkable` catch-all is answered, and the answer is stronger than the question.** This
+  section had it as an open question — a tree zipped against something that is neither a branch nor
+  `nothing` walks there and raises here — with the implication that the catch-all might be a capability
+  worth keeping. It was not. `map` over a `NamedTuple` and a bare `Vector` matches neither of Base's
+  specific methods, falls through to the generic iterator `map`, and zips the branch's *entries*
+  against the leaf's *elements*: `map(f, (a = [1.0], b = [2.0]), [9.0, 9.0])` returns
+  `[([1.0], 9.0), ([2.0], 9.0)]`, and a leaf shorter than the branch is silently truncated. So the
+  catch-all turned a caller's bug into a wrong answer where `_as_namedtuple`'s three exhaustive methods
+  raise a `MethodError` naming the type. Deleting the file fixed a latent bug of GO's own.
+- **The pirated `l2norm`s are gone**, upstream. `l2norm(::AbstractMatrix)` and
+  `l2norm(::AbstractFloat)` were piracy on *Base* types; `GeometricBase` 0.14.9 takes
+  `L2norm(x::AbstractArray)`, which is the matrix method with the `vec` removed, and its
+  `L2norm(x::Real) = x^2` had always given `abs` for the second. GO's `Project.toml` pins `0.14.9` for
+  it. Removing the `vec` was not only ownership: `vec` of a `Matrix` allocates a 32-byte wrapper, so
+  `l2norm` of a parameter set had cost 32 bytes per matrix leaf on every stopping criterion of every
+  iteration.
+
+**One thing to carry back into D13 and D17.** GO 0.6.0's allocation table reported a 20-iteration
+`solve!` going from 2 431 912 bytes to 1 559 832 on its flat `NamedTuple` problem and read the whole of
+it as its own flat-buffer work. It is not: its 0.5.0 column resolved **0.2.1** and its 0.6.0 column
+0.2.2, so **737 840 of those 872 080 bytes are D13 and D17** and 134 240 are GO's. Verified by pinning
+0.2.1 against GO's own 0.5.0 worktree, which returns the old column byte for byte. Corrected in GO with
+a three-column table holding the dependency fixed. Worth knowing here because it is the largest measured
+consequence either defect has, and neither entry above records one.
+
+**§3's lesson, a third time in one revision.** Three entries of the defect table were stale when that
+revision began — D3, half of D8, D11 — all recorded as open after `GeometricOptimizers` 0.5.0 and
+`GeometricMachineLearning` 0.6.0 had fixed them. These three are the same failure in the same
+direction, and they survived a revision that had just written the lesson down. The specific trap here
+is worth naming because it is not the general one: **the work was done in a commit under a pull request
+whose body describes the state before it.** #68's body still argues for keeping `_mapleaves` and cites
+GO's issue D9 as the reason; #69's body does not mention the walk at all. A status claim checked against
+the pull requests rather than against the tree gets all three of these wrong.
 
 ### `GeometricMachineLearning` 0.6.1 — done
 
