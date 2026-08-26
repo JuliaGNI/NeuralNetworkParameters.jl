@@ -81,6 +81,15 @@ they were not.
   what `Base` costs on the same branch, and what a consumer that wrote its own walk over `map` to get
   around this was paying instead.
 
+  **Every set above is a bare `NamedTuple`, and the `parameterlayout` column reads low because of it.**
+  A consumer holds a `NetworkParameters`, which reaches the walk through one more method, and on
+  Julia 1.11 that method is what the column costs: 13.44 s at 369 children against the 1.35 s above,
+  and 88.69 s at 768 against 2.73 s. It is the *entry point* and not the total — the whole path,
+  `parameterlayout` then `flatten` then `unflatten`, is 21.66 s bare and 22.41 s wrapped at 369 — and
+  Julia 1.12 and 1.13 do not distinguish the two shapes at all (1.78 s and 1.67 s wrapped at 369). The
+  sweep runs both shapes now; see D20 in `PLAN.md` and the note above
+  `_layout(::NetworkParameters, ::Int)` in `src/layout.jl`.
+
   The `flatten` column is the one that goes the wrong way at the two largest widths, and it is a
   re-attribution rather than a loss: `parameterlayout` no longer absorbs the shared compilation, so
   `flatten` pays for it instead. Measured alone in its own process at 369 children, `flatten` is

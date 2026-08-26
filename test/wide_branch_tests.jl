@@ -157,6 +157,43 @@ end
     @test counted[] > 0
 end
 
+# The same width in the shape a consumer holds it. Every other set in this file is a bare `NamedTuple`,
+# and the two are not the same measurement: a bare branch reaches `parameterlayout` through one
+# `@generated` body, a wrapped one goes through `_layout(::NetworkParameters, ::Int)` first. On Julia
+# 1.11 those cost 1.37 s and 13.44 s on the same 369 leaves. The *properties* below hold on both and are
+# what this file pins; the cost is `scripts/wide_branch_cost.jl`'s business, and it sweeps both shapes at
+# every width for exactly this reason.
+#
+# 48 and not 369, for the reason the nesting testset gives: nothing here depends on the width once the
+# width is past the unrolling boundary, and a wrapped 369 would cost the suite the better part of half a
+# minute on the compat floor to say what the 48 already says.
+wrapped_set(k) = NetworkParameters(wide_set(k))
+
+@testset "a wide NetworkParameters round-trips and does not allocate at $k children" for k in (48,)
+    ps = wrapped_set(k)
+    v, layout = flatten(ps)
+
+    @test length(v) == 4k
+    @test flatlength(ps) == 4k
+    @test unflatten(layout, v) isa NetworkParameters
+    @test unflatten(layout, v) == ps
+    @test mapparameters(x -> 2x, ps).p1 == 2 * ps.p1
+
+    buf = similar(v)
+    dest = unflatten(layout, zero(v))
+    _flatten_allocs(buf, ps, layout)          # warm up the call and the measurement
+    _unflatten_allocs(dest, layout, v)
+    @test _flatten_allocs(buf, ps, layout) == 0
+    @test _unflatten_allocs(dest, layout, v) == 0
+
+    # the two-set walks too: the wrapper is one more level for them to index in place
+    counted = Ref(0)
+    bump2(_, _) = (counted[] += 1; nothing)
+    @test _thunk_allocs(() -> mapparameters!(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> mapstorage!(bump2, dest, ps)) == 0
+    @test counted[] > 0
+end
+
 @testset "a wide branch is a ParameterSet and a parameter tree" begin
     ps = wide_set(369)
     @test ps isa ParameterSet
