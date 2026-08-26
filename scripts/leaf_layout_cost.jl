@@ -31,10 +31,16 @@ const T = Float32
 # than a detail: compiling this function would otherwise infer through the call in its body, so the
 # cost would be spent before the clock starts and every row would read 0.00 s. `wide_branch_cost.jl`
 # read exactly that on Julia 1.13 until it was written this way.
+#
+# The **value** comes back with the time for the same reason. The caller wants the layout's type as
+# well as the clock, and reaching for it with a second, direct `parameterlayout(ps)` would put an
+# inferable call to the timed function in the caller's own body — where its cost is paid while the
+# caller compiles, before `t = time()` ever runs. That the union `ps` infers to happens to be too
+# wide for Julia to split is not a guard; handing the value back is.
 function first_call(f, args...)
     t = time()
-    Base.invokelatest(f, args...)
-    round(time() - t; digits = 2)
+    x = Base.invokelatest(f, args...)
+    round(time() - t; digits = 2), x
 end
 
 # All leaves the same tiny matrix: this measures the shape a layout is held in, not the size of the
@@ -65,9 +71,9 @@ const CASES = (
 function run_one(case::Int, wrapped::Bool)
     name, build = CASES[case]
     ps = wrapped ? NetworkParameters(build()) : build()
-    t = first_call(parameterlayout, ps)
+    t, layout = first_call(parameterlayout, ps)
     println(rpad(name, 18), rpad(wrapped ? "wrapped" : "bare", 10), rpad(t, 8),
-        type_nodes(typeof(parameterlayout(ps))))
+        type_nodes(typeof(layout)))
     flush(stdout)
 end
 

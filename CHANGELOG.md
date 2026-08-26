@@ -8,11 +8,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 **The cost of a wrapped parameter set was one unused type parameter.** 0.2.2 made a wide branch
 compilable and left one shape standing that was not: `parameterlayout` on a 369-leaf set cost 1.35 s as
-a bare `NamedTuple` and 13.50 s inside a `NetworkParameters`, and at 768 leaves 2.76 s against 86.88 s.
-The gap was read as a cost of the composition in `_layout(::NetworkParameters, ::Int)`, and issue #16
-read it as a cost of *nesting*. It was neither, and the note in `src/layout.jl` that argued the first
-of those is corrected here rather than released — it was written after the 0.2.2 bump and this is its
-first release.
+a bare `NamedTuple` and 13.40 s inside a `NetworkParameters`, and at 768 leaves 2.77 s against 87.77 s.
+Those four are the table below, which is where the entry's figures come from unless it names another
+harness or another run. The gap was read as a cost of the composition in
+`_layout(::NetworkParameters, ::Int)`, and issue [#16] read it as a cost of *nesting*. It was neither,
+and the note in `src/layout.jl` that argued the first of those is corrected here rather than released —
+it was written after the 0.2.2 bump and this is its first release.
 
 ### Removed
 
@@ -29,9 +30,12 @@ first release.
   `AbstractNeuralNetworks`, `SymbolicNeuralNetworks`, `GeometricOptimizers` or
   `GeometricMachineLearning` does — they dispatch on the bare type and read `size`.
 
-  A layout also no longer holds a live reference to each leaf array, so keeping one no longer keeps the
-  parameter set it was built from alive. `Base.summarysize` of the layout of a one-leaf set is 48 bytes
-  whether that leaf is 2 × 2 or 1000 × 1000.
+  A terminal leaf's layout also no longer holds a live reference to the array, so keeping one no longer
+  keeps that leaf alive. `Base.summarysize` of the layout of a one-leaf set is 48 bytes whether the
+  leaf is 2 × 2 or 1000 × 1000, and `test/layout_tests.jl` pins it. A *structured* leaf is unchanged
+  and stays that way: its `WrappedLayout` holds the prototype `rebuild` unflattens against, so a set
+  with a `SymmetricMatrix` or a manifold element in it still has those leaves reachable from its
+  layout.
 
 ### Fixed
 
@@ -72,11 +76,11 @@ first release.
   that "a characteristic of the compat floor and not of the walk" was wrong: it was a characteristic of
   the layout type, which 1.12 and 1.13 were better at absorbing.
 
-  Issue #15 filed this as hygiene and said explicitly that it was not the cause of the nested-layout
+  Issue [#15] filed this as hygiene and said explicitly that it was not the cause of the nested-layout
   compile cost, on the evidence that alternating `Matrix`/`Vector` leaves cost 11.32 s against 13.9 s
   homogeneous. That measurement is sound and its conclusion — that leaf *diversity* is not the driver —
   still holds. It compared two sets under the old layout type, though, and never compared the layout
-  type with and without the parameter, which is where the 13× was.
+  type with and without the parameter, which is where the 13× was ([#18]).
 
 ## [0.2.2] — 2026-08-25
 
@@ -538,6 +542,11 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 [#11]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/11
 [#12]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/12
 [#13]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/13
+[#15]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/15
+[#16]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16
+[#18]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/18
+[0.2.3]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.3
+[0.2.2]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.2
 [0.2.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.1
 [0.2.0]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.0
 [0.1.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.1.1

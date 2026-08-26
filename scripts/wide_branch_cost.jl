@@ -27,19 +27,22 @@
 # **Every width is swept in both shapes: a bare `NamedTuple` and the same set inside a
 # `NetworkParameters`.** That is the same methodology applied to the argument rather than to the clock,
 # and it is worth as much. `parameterlayout` reaches a bare branch through one `@generated` body and a
-# wrapped one through `_layout(::NetworkParameters, ::Int)` first, and until 0.2.3 those two cost wildly
-# different amounts on the same leaves: on Julia 1.11, 1.35 s bare against 13.50 s wrapped at 369
-# children, and 2.77 s against 87.77 s at 768 through `scripts/leaf_layout_cost.jl`, which reaches that
-# width. The *whole* path cost nearly the same either way — 19.96 s
-# bare against 21.90 s wrapped at 369, summed over `parameterlayout`, `flatten` and `unflatten` — so
-# what the wrapper changed was which entry point paid, not the total.
+# wrapped one through `_layout(::NetworkParameters, ::Int)` first, and until 0.2.3 those two cost
+# wildly different amounts on the same leaves: on Julia 1.11, 1.35 s bare against 13.50 s wrapped at
+# 369 children, and 2.77 s against 87.77 s at 768 through `scripts/leaf_layout_cost.jl`, which reaches
+# that width. The *whole* path cost nearly the same either way — 19.96 s bare against 21.90 s wrapped
+# at 369, summed over `parameterlayout`, `flatten` and `unflatten` — so what the wrapper changed was
+# which entry point paid, not the total.
 #
 # That is how this sweep found what 0.2.3 removed. The gap was not a cost of the wrapper, and issue #16
 # was right that it was not a cost of nesting either: it was `LeafLayout`'s `prototype` type parameter,
 # which put every leaf's concrete array type into the layout type this method's caller infers through.
-# The two columns now agree — 1.05 s wrapped against 1.04 s bare at 369, 3.01 s against 3.07 s at 768,
-# 0.84 s against 0.85 s on a 16 × 24 set of the same 384 leaves — and the whole 369-wrapped path is
-# 8.64 s. The rows past 369 and the nested one are `scripts/leaf_layout_cost.jl`.
+# The two columns now agree, and `scripts/leaf_layout_cost.jl` is where every figure in this paragraph
+# is from — 1.05 s wrapped against 1.04 s bare at 369, 3.01 s against 3.07 s at 768, 0.84 s against
+# 0.85 s on a 16 × 24 set of the same 384 leaves — with the whole 369-wrapped path at 8.64 s. That
+# script is the one that reaches past 369 and the one that varies the nesting; read its 369 row against
+# this one's the way its 13.40 s reads against the 13.50 s above, a tenth of a second apart.
+#
 # Both shapes are still swept, for two reasons: a consumer holds a `NetworkParameters`, so a sweep of
 # bare sets alone would report a shape nobody has, and two columns that agree are how the asymmetry
 # coming back would be noticed.

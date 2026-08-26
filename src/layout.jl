@@ -21,10 +21,11 @@ abstract type ParameterLayout end
 A leaf whose numbers are copied straight into the flat vector: it occupies `range`, and comes back
 `reshape`d to `size` (`()` for a scalar).
 
-This is the terminal case — [`freeparameters`](@ref) hands the leaf back unchanged — so there is
-nothing to rebuild and the layout is the shape alone. Two leaves of the same shape therefore share one
-layout type whatever they hold, and a stored layout keeps no reference to the parameters it was built
-from. [`WrappedLayout`](@ref) is the other case, and it does keep a prototype.
+This is the terminal case — [`freeparameters`](@ref) hands back something of the leaf's own type —
+so there is nothing to rebuild and the layout is the shape alone. Two leaves of the same shape
+therefore share one layout type whatever they hold, and a stored layout keeps no reference to the
+parameters it was built from. [`WrappedLayout`](@ref) is the other case, and it does keep a
+prototype.
 """
 struct LeafLayout{N} <: ParameterLayout
     range::UnitRange{Int}
@@ -142,7 +143,7 @@ parameterlayout(ps) = first(_layout(ps, 0))
 # is not one now, at 384 leaves in 16 branches against 369 in one.
 #
 # So there is nothing left here to move, and fusing the two steps into one `@generated` body — which
-# earlier releases measured, and declined — answers a question that no longer arises.
+# the note this replaces measured, and declined — answers a question that no longer arises.
 #
 # What survives is where to look rather than what to change. **The total is what a consumer compiles,
 # and it does not depend on which method holds it.** On 0.2.2 the bare and wrapped paths split their
