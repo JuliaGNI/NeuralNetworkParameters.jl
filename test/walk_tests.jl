@@ -158,6 +158,27 @@ end
           2 * sum(abs2, first(flatten(ps)))
 end
 
+# A hole where a leaf keeps its storage behind an interface. `mapparameters` and `foldparameters` hand
+# the whole leaf and the `nothing` to the caller and are done; the storage walks have to descend, and
+# used to descend by asking the hole for its `freeparameters` — which answered with the leaf protocol's
+# own error, telling the caller to define `freeparameters(::Nothing)`.
+@testset "a nothing leaf reaches the storage walks too" begin
+    holes = NetworkParameters((L1 = (W = nothing, b = nothing), L2 = (S = nothing,),
+        L3 = (G = ps.L3.G,)))
+
+    # the storage of a `Sym` is one array, so there is exactly one thing to pair the hole with, and
+    # `op` sees it: 2 + 1 numbers from `L1` and 3 from `L2`, with `L3` paired against itself
+    @test foldstorage((acc, x, y) -> y === nothing ? acc + length(x) : acc, 0, ps, holes) == 6
+    @test mapstorage((x, y) -> y === nothing ? zero(x) : x, ps, holes).L2.S.S == zeros(3)
+
+    # a hole against a *multi-block* leaf raises instead: one `nothing` cannot stand for each block,
+    # and each walk says so in its own terms rather than in the leaf protocol's
+    gaps = NetworkParameters((L1 = (W = nothing, b = nothing), L2 = (S = nothing,),
+        L3 = (G = nothing,)))
+    @test_throws "partial sum" foldstorage((acc, x, y) -> acc, 0.0, ps, gaps)
+    @test_throws "nothing to put" mapstorage((x, y) -> x, ps, gaps)
+end
+
 @testset "a fold rejects what it cannot reduce" begin
     a = NetworkParameters((L1 = [1.0], L2 = [2.0]))
 

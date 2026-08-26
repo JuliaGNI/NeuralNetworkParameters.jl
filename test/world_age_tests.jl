@@ -19,6 +19,13 @@
 # `_foreach_zip` and `_fold_zip` are run at **two** arities, because the key and index helpers a
 # further set needs are only reached at the second — one set has no second set to pair against, so an
 # arity-one walk would leave exactly that chain of helpers untried.
+#
+# For the same reason the file ends with three walks that are *wrong*. `_arity_error`,
+# `_child_keys_error` and `_no_folded_skip_error` are reached from a generator only when a caller has
+# mismatched something, so every successful walk above leaves all three untried — and each could be
+# moved below its caller with this file still passing. What a misplaced one produces is a `MethodError`
+# saying the method "may be too new" in place of the `ArgumentError` the caller is owed, so the error
+# *type* is the assertion and not merely that something was thrown.
 
 using Test
 
@@ -64,6 +71,23 @@ end
 foldparameters((a, x) -> a + length(x), 0, ps) == 4 || exit(7)
 foldparameters((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(10)
 foldstorage((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(11)
+
+# The three error helpers, each reached from a generator and none of them by a walk that succeeds
+raises_argument_error(f) = try
+    f()
+    false
+catch e
+    e isa ArgumentError
+end
+
+# `_arity_error`: two children on the left of `L1` and one on the right
+raises_argument_error(() -> foreachparameters((_, _) -> nothing, ps,
+    (L1 = (W = [1.0 2.0],), L2 = (W = [4.0;;],)))) || exit(12)
+# `_child_keys_error`: the same keys in the other order, which is the crossing-over it exists to stop
+raises_argument_error(() -> foreachparameters((_, _) -> nothing, ps,
+    (L2 = ps.L2, L1 = ps.L1))) || exit(13)
+# `_no_folded_skip_error`: the fold declining to half-reduce a set it was not given
+raises_argument_error(() -> foldparameters((a, x, y) -> a, 0.0, ps, nothing)) || exit(14)
 
 exit(0)
 """

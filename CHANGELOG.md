@@ -24,8 +24,9 @@ walk living here rather than being written again by every consumer. Issue [#19].
 
   A set that is `nothing` **raises**, where `foreachparameters` skips one: a fold reduces every leaf
   it is given, so a set left out would make the answer a partial sum without saying so. A `nothing`
-  *leaf* still reaches `op`, so a caller who wants to decide what a missing leaf contributes still
-  can.
+  *leaf* is a different thing and still reaches `op`, so a caller who wants to decide what a missing
+  leaf contributes still can — including where the leaf keeps its storage behind an interface, which
+  is the **Fixed** entry below.
 
 - **`foldstorage(op, init, ps, rest...)`**, which is the same walk over the `freeparameters` of each
   leaf, and the level `flatten` writes. The inner product of two sets with a symmetric leaf is over
@@ -39,6 +40,25 @@ walk living here rather than being written again by every consumer. Issue [#19].
   selects which of the two `_fold_step` continues with, exactly as it does for the `foreach` family.
 
 ### Fixed
+
+- **A `nothing` in place of a leaf reached the storage walks as the leaf protocol's own error.**
+  `foldstorage` and `mapstorage` have to descend into a leaf that keeps its storage behind an
+  interface, and they descended by asking every further set's leaf for its `freeparameters` — so a
+  hole was asked where its storage lives, and the protocol answered the only way it can:
+
+  ```
+  ArgumentError: no method of `freeparameters` for `Nothing`.
+      NeuralNetworkParameters.freeparameters(::Nothing) = ...
+  ```
+
+  which is the one instruction that is not the fix. The hole survives the descent now. A `nothing`
+  against a leaf whose storage is a single array — a `SymmetricMatrix`, a manifold element, a
+  horizontal lift — reaches `op` or `f` paired with that array, which is what the docstrings say and
+  what `mapparameters` and `foldparameters` already did with the whole leaf. A `nothing` against a
+  **multi-block** leaf has nothing to pair one-to-one with and raises each walk's own error instead:
+  the partial-sum error for the fold, and for `mapstorage` the one that names the three walks which
+  skip a hole. `mapstorage` carried this since the storage walks were written; it is one line from
+  the fold's and has the same cause, so it is fixed here.
 
 - **`scripts/wide_branch_cost.jl` did not sweep the fold.** It timed `parameterlayout`,
   `map(zero, ·)`, `mapparameters`, `flatten`, `unflatten` and the in-place allocations, at both shapes
@@ -86,7 +106,9 @@ walk living here rather than being written again by every consumer. Issue [#19].
   none of those figures, which is why they are not annotated; the boxing is the caller's. A closure
   that captures a function needs nothing, a closure being its own type — so
   `foldparameters((acc, x) -> acc + abs2(f(x)), 0, ps)` is how a function of each leaf is folded, and
-  no second function argument is needed.
+  no second function argument is needed. `test/wide_branch_tests.jl` pins **both** halves of that —
+  the annotated caller at zero and the otherwise identical unannotated one above zero — so the
+  instruction this package gives its consumers cannot go stale behind a green suite.
 
 ### Noticed and not addressed
 

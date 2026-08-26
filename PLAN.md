@@ -2,12 +2,13 @@
 
 Analysis last revised 2026-08-26, against these working trees. The whole family moves in one wave and
 only this package's dependency, `ChainRulesCore`, is outside it. Two rows have landed on `main` since
-the wave began — this package's 0.2.3 and `GeometricOptimizers`' 0.6.0 — and the rest are still
-branches, so read the third column before quoting a version as released.
+the wave began — this package's 0.2.3 and `GeometricOptimizers`' 0.6.0 — and the rest, this
+repository's own 0.2.4 among them, are still branches, so read the third column before quoting a
+version as released.
 
 | package | version | branch |
 |---|---|---|
-| `NeuralNetworkParameters` | 0.2.3 | this repository, `main` |
+| `NeuralNetworkParameters` | 0.2.4 | this repository, `issue-19-a-zipped-foldparameters` (0.2.3 is on `main`) |
 | `GeometricBase` | 0.14.9 | `l2norm-over-any-array-and-julia-1.11` |
 | `SimpleSolvers` | 0.13.1 | `retire-the-1.10-getrf-fallback` |
 | `AbstractNeuralNetworks` | 0.7.2 | `adopt-parameterset` |
@@ -313,7 +314,7 @@ Design points worth keeping in view:
 ### Verification
 
 ```bash
-julia --project -e 'using Pkg; Pkg.test()'                                            # 471 tests
+julia --project -e 'using Pkg; Pkg.test()'                                            # 479 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
 julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20/D22
 julia --project=. scripts/leaf_layout_cost.jl                                         # D21

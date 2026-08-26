@@ -49,8 +49,10 @@ _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 _thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
 
 # `@noinline` and `::F where {F}`, and both matter: inlining would hide the question, and the
-# annotation is the answer to it. See the assertion below.
+# annotation is the answer to it. `_folded_through_boxed` is the same function without it, so the pair
+# is an A/B of the annotation rather than two readings of one call. See the assertions below.
 @noinline _folded_through(op::F, ps, rest...) where {F} = foldparameters(op, 0.0f0, ps, rest...)
+@noinline _folded_through_boxed(op, ps, rest...) = foldparameters(op, 0.0f0, ps, rest...)
 
 @testset "flatten and unflatten reach a branch of $k children" for k in WIDTHS
     ps = wide_set(k)
@@ -144,11 +146,18 @@ end
 
     # and the claim the `foldparameters` docstring makes to a consumer: a fold reached through a
     # function that hands `op` on is allocation-free *because* that function annotates it
-    # `::F where {F}`. Without the annotation the same call costs 3 088 bytes here and 6 160 at arity
-    # two, on Julia 1.11 and 1.13 alike — the boxing is the caller's, not the walk's, which is why
-    # this package's own signatures do not carry it
+    # `::F where {F}`. The boxing is the caller's, not the walk's, which is why this package's own
+    # signatures do not carry it
     @test _thunk_allocs(() -> _folded_through(fold1, ps)) == 0
     @test _thunk_allocs(() -> _folded_through(fold2, ps, ps)) == 0
+
+    # the other half of that claim, which is the half the docstring asks a consumer to act on: the
+    # identical caller *without* the annotation allocates, 3 088 bytes here and 6 160 at arity two on
+    # Julia 1.11, 1.12 and 1.13 alike. Asserted because a comment saying so goes stale behind a green
+    # suite — a failure here means Julia's specialisation heuristic has moved and the docstring's
+    # instruction can be relaxed, not that the walk has broken
+    @test _thunk_allocs(() -> _folded_through_boxed(fold1, ps)) > 0
+    @test _thunk_allocs(() -> _folded_through_boxed(fold2, ps, ps)) > 0
 
     # and the walk really ran, rather than being elided as the dead code a side-effect-free `f` is
     @test counted[] > 0

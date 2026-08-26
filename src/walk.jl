@@ -112,6 +112,11 @@ This is the level at which entrywise arithmetic on a structured parameter is mea
 ``n \\times n`` interface would do twice the work, and for a skew-symmetric or triangular matrix there
 is no `setindex!` to broadcast through at all.
 
+A `nothing` in place of a leaf reaches `f` as far as there is one leaf to pair it with: the storage of
+a `SymmetricMatrix` or a manifold element is a single array, so `f` is handed that array and the
+`nothing`. A leaf whose storage is *several* blocks has nothing to pair one `nothing` with, and raises
+as a `nothing` branch does — an out-of-place walk has nothing to put in the hole either way.
+
 # Examples
 
 ```jldoctest
@@ -142,7 +147,7 @@ end
 @inline function mapstorage(f, x, rest::Vararg{Any, N}) where {N}
     s = freeparameters(x)
     s === x && return f(x, rest...)
-    rebuild(x, mapstorage(f, s, map(freeparameters, rest)...))
+    rebuild(x, mapstorage(f, s, map(_leaf_storage, rest)...))
 end
 
 """
@@ -253,7 +258,9 @@ The leaves are visited in the order [`flatten`](@ref) writes them, so a fold and
 to fold over the differentiable storage instead.
 
 Where [`foreachparameters`](@ref) skips a set that is `nothing`, a fold raises: it reduces every leaf
-it is given, so a set left out would make the result a partial sum without saying so.
+it is given, so a set left out would make the result a partial sum without saying so. A `nothing` in
+place of a single *leaf* still reaches `op`, exactly as it reaches `f` in [`mapparameters`](@ref) —
+what a missing leaf contributes to the sum is the caller's to decide, and only the caller's.
 
 Allocation-free at any width, depth and arity — **provided a caller that hands `op` on through a
 function of its own annotates it `::F where {F}` there.** Julia does not specialise on a function
@@ -309,6 +316,10 @@ This is the level at which a reduction over a structured parameter is meaningful
 stores; reading its dense ``n \\times n`` interface instead would count every off-diagonal entry
 twice, and for a skew-symmetric or triangular matrix there is no dense reading to be had at all.
 
+A `nothing` in place of a leaf reaches `op` as far as there is one leaf to pair it with, on the terms
+[`mapstorage`](@ref) states: the storage of a `SymmetricMatrix` is a single array, and a leaf whose
+storage is several blocks raises instead, since one `nothing` cannot stand for each of them.
+
 # Examples
 
 ```jldoctest
@@ -333,7 +344,7 @@ foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
 @inline function foldstorage(op, init, x, rest::Vararg{Any, N}) where {N}
     s = freeparameters(x)
     s === x && return op(init, x, rest...)
-    foldstorage(op, init, s, map(freeparameters, rest)...)
+    foldstorage(op, init, s, map(_leaf_storage, rest)...)
 end
 
 # ---------------------------------------------------------------------------------------------------
@@ -406,6 +417,16 @@ end
 
 @inline _as_tuple(x::Tuple) = x
 @inline _as_tuple(x::Nothing) = nothing
+
+# The storage of a further set's leaf, where a `nothing` stays a `nothing`. A hole has no storage to
+# ask for, and `freeparameters` answers a hole the only way it can — with the leaf protocol's own
+# error, telling the caller to define `freeparameters(::Nothing)`, which is the one thing that is not
+# the answer. So the hole survives the descent and the level below decides what it means: a leaf whose
+# storage is one array hands `op` or `f` that array and the `nothing`, exactly as `mapparameters` and
+# `foldparameters` hand over the whole leaf and the `nothing`; a leaf whose storage is *several* blocks
+# has nothing to pair one `nothing` with, and the branch walk raises its own error saying so.
+@inline _leaf_storage(::Nothing) = nothing
+@inline _leaf_storage(x) = freeparameters(x)
 
 # `||` and not `any`, so it still short-circuits: the whole point is not to look at the rest once a
 # `nothing` has been found.
@@ -505,6 +526,16 @@ end
 # outside. `GeometricOptimizers` wrote three `Base.tail` folds for want of a zipped one here —
 # `l2norm`, `solution_scale` and `_dot` — and they cost 26 to 71 s to compile at 369 children on Julia
 # 1.12 and 1.13, against 0.65 to 1.47 s for the same code on 1.11.9 (issue #19).
+#
+# **Written out at every width, where `_map_zip` stops at 32 — and by that walk's own test rather than
+# in spite of it.** The question is "in an inner loop or not", and those same three folds are what an
+# optimizer computes once per iteration, which puts the fold on the side `_flatten_children!` and
+# `_foreach_zip` are on and not the side `mapparameters` is. The sweep prints the price of the
+# difference in one row: at 369 bare children on 1.13 `mapparams` reads 0.04 s against this body's
+# 0.48 s, because `mapparameters` handed that branch back to `Base.map`. There is no such hand-off to
+# be had for a reduction anyway. `Base.map` returns a container of the same shape where a fold returns
+# one number, and folding `values(ps)` instead materialises per branch and per further set exactly the
+# tuple the walks here were rewritten to stop materialising.
 #
 # `scripts/wide_branch_cost.jl` sweeps that comparison here, and its `tailfold` control reproduces it:
 # on a 369-child branch the chain costs 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3,
