@@ -110,7 +110,11 @@ they were not.
   | 48 | 0.58 → 0.20 | 1.09 → 0.10 | 1.31 → 0.23 | 1.26 → 0.46 | 4.24 → **0.99** |
   | 64 | 1.32 → 0.22 | 2.63 → 0.10 | 3.15 → 0.32 | 2.95 → 0.72 | 10.05 → **1.36** |
   | 128 | 7.75 → 0.51 | 24.49 → 0.12 | 27.84 → 0.70 | 25.82 → 2.01 | 85.90 → **3.34** |
-  | 369 | not reached → 1.73 | → 0.17 | → 2.48 | → 19.27 | not reached → **24.65** |
+  | 369 | — → 1.73 | — → 0.17 | — → 2.48 | — → 19.27 | — → **24.65** |
+
+  The 369-child row has no 0.2.1 column: `parameterlayout` alone was still compiling after 20 minutes
+  in a process of its own, which is the "did not finish" of the original report, now with a lower bound
+  on it. Every other row is a completed measurement of both trees.
 
   The shape is the same as the 1.11.9 table above and the margin is wider, because the figures the old
   harness printed were missing the inference that is most of the cost. 16 children is the one width
@@ -179,7 +183,7 @@ they were not.
 
   | children | 16 | 32 | 48 | 64 | 128 | 369 |
   |---|---|---|---|---|---|---|
-  | 0.2.1 | 0 | 0 | 23 488 | 54 848 | 265 408 | not reached |
+  | 0.2.1 | 0 | 0 | 23 488 | 54 848 | 265 408 | — |
   | first written here | 0 | 0 | 800 | 1 088 | 2 176 | 6 144 |
   | **now** | 0 | 0 | **0** | **0** | **0** | **0** |
 
