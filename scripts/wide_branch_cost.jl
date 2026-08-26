@@ -27,22 +27,30 @@
 # **Every width is swept in both shapes: a bare `NamedTuple` and the same set inside a
 # `NetworkParameters`.** That is the same methodology applied to the argument rather than to the clock,
 # and it is worth as much. `parameterlayout` reaches a bare branch through one `@generated` body and a
-# wrapped one through `_layout(::NetworkParameters, ::Int)` first, and on Julia 1.11 those two cost
-# wildly different amounts on the same leaves: 1.37 s bare against 13.44 s wrapped at 369 children,
-# 2.73 s against 88.69 s at 768. The *whole* path costs the same either way — 21.66 s bare against
-# 22.41 s wrapped at 369, summed over `parameterlayout`, `flatten` and `unflatten` — so what the
-# wrapper changes is which entry point pays, not the total. Julia 1.12 and 1.13 do not distinguish the
-# two at all (1.78 s and 1.67 s wrapped at 369).
+# wrapped one through `_layout(::NetworkParameters, ::Int)` first, and until 0.2.3 those two cost
+# wildly different amounts on the same leaves: on Julia 1.11, 1.35 s bare against 13.50 s wrapped at
+# 369 children, and 2.77 s against 87.77 s at 768 through `scripts/leaf_layout_cost.jl`, which reaches
+# that width. The *whole* path cost nearly the same either way — 19.96 s bare against 21.90 s wrapped
+# at 369, summed over `parameterlayout`, `flatten` and `unflatten` — so what the wrapper changed was
+# which entry point paid, not the total.
 #
-# A consumer holds a `NetworkParameters`, so a sweep of bare sets alone reports the cheap column and
-# calls it the cost. It reported exactly that until this shape was added, and issue #16 read the
-# difference between the two columns as a cost of *nesting*, which it is not — a flat 369-leaf set and
-# a 16 × 24 one cost the same 13.8 s wrapped and the same 1.35 s bare.
+# That is how this sweep found what 0.2.3 removed. The gap was not a cost of the wrapper, and issue #16
+# was right that it was not a cost of nesting either: it was `LeafLayout`'s `prototype` type parameter,
+# which put every leaf's concrete array type into the layout type this method's caller infers through.
+# The two columns now agree, and `scripts/leaf_layout_cost.jl` is where every figure in this paragraph
+# is from — 1.05 s wrapped against 1.04 s bare at 369, 3.01 s against 3.07 s at 768, 0.84 s against
+# 0.85 s on a 16 × 24 set of the same 384 leaves — with the whole 369-wrapped path at 8.64 s. That
+# script is the one that reaches past 369 and the one that varies the nesting; read its 369 row against
+# this one's the way its 13.40 s reads against the 13.50 s above, a tenth of a second apart.
+#
+# Both shapes are still swept, for two reasons: a consumer holds a `NetworkParameters`, so a sweep of
+# bare sets alone would report a shape nobody has, and two columns that agree are how the asymmetry
+# coming back would be noticed.
 #
 # The two shapes run in separate processes for the reason the widths do. They are different methods but
 # they share the inner `_layout(::NamedTuple, ::Int)` specialisation, so a bare row run first leaves the
-# wrapped row less to compile. On Julia 1.11 the wrapped 369 row takes about 25 s on its own account;
-# on 1.13 it takes about 5 s.
+# wrapped row less to compile. On Julia 1.11 the wrapped 369 row now takes about 10 s on its own
+# account, where before 0.2.3 it took about 25 s.
 
 using NeuralNetworkParameters
 

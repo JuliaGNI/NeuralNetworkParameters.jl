@@ -39,6 +39,31 @@ end
     @test layout.inner.children.L1.children.b.size == (1,)
 end
 
+@testset "a leaf layout is the shape, not the leaf" begin
+    @test fieldnames(LeafLayout) == (:range, :size)
+    # leaves that differ only in what they hold share one layout type
+    w64 = parameterlayout(NetworkParameters((W = [1.0 2.0],))).inner.children.W
+    w32 = parameterlayout(NetworkParameters((W = Float32[1.0 2.0],))).inner.children.W
+    @test typeof(w64) === typeof(w32)
+    @test w64 == w32
+
+    # A terminal leaf's layout holds no reference to the leaf, so storing one does not keep the
+    # parameters alive. The three assertions here fail to three different things and none subsumes
+    # another: `fieldnames` above catches a field put back, `typeof` catches a type parameter put back,
+    # and this catches the *retention* — which is the property a consumer has, and which any field
+    # reaching the leaf by another route would break while the other two still passed. Eight megabytes
+    # against thirty-two bytes of leaf, so it cannot pass by the arrays happening to be small.
+    small = Base.summarysize(parameterlayout(NetworkParameters((W = zeros(2, 2),))))
+    large = Base.summarysize(parameterlayout(NetworkParameters((W = zeros(1000, 1000),))))
+    @test small == large
+
+    # The other case, stated so that the guarantee above is not read wider than it is: unflattening a
+    # structured leaf rebuilds against a prototype, so a `WrappedLayout` does hold its leaf.
+    l = parameterlayout(ps).inner.children.L2.children.S
+    @test l isa WrappedLayout
+    @test l.prototype === ps.L2.S
+end
+
 @testset "scalar and empty leaves" begin
     l = parameterlayout(NetworkParameters((a = 1.5, b = Float64[], c = [2.0 3.0])))
     @test length(l) == 3

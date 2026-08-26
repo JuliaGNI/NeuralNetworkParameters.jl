@@ -16,18 +16,20 @@ whose numbers are copied directly.
 abstract type ParameterLayout end
 
 """
-    LeafLayout(range, size, prototype)
+    LeafLayout(range, size)
 
 A leaf whose numbers are copied straight into the flat vector: it occupies `range`, and comes back
 `reshape`d to `size` (`()` for a scalar).
 
-`prototype` is the leaf it was built from, kept so that [`rebuild`](@ref) has something to rebuild
-against.
+This is the terminal case — [`freeparameters`](@ref) hands back something of the leaf's own type —
+so there is nothing to rebuild and the layout is the shape alone. Two leaves of the same shape
+therefore share one layout type whatever they hold, and a stored layout keeps no reference to the
+parameters it was built from. [`WrappedLayout`](@ref) is the other case, and it does keep a
+prototype.
 """
-struct LeafLayout{N, P} <: ParameterLayout
+struct LeafLayout{N} <: ParameterLayout
     range::UnitRange{Int}
     size::NTuple{N, Int}
-    prototype::P
 end
 
 """
@@ -122,33 +124,37 @@ layout = parameterlayout(ps)
 """
 parameterlayout(ps) = first(_layout(ps, 0))
 
-# The container case, and **the one composition here that is deliberately left standing.**
+# The container case: the child walk, and then a step that wraps what it returns.
 #
-# This is the shape the note below calls the expensive way round: a `@generated` body yielding a large
-# type, composed across a function call with a step that wraps it. It costs what that shape costs. On
-# Julia 1.11, `parameterlayout` on a flat 369-leaf set is 1.37 s as a bare `NamedTuple` and **13.44 s**
-# inside a `NetworkParameters`; at 768 leaves, 2.73 s against 88.69 s. Nesting has nothing to do with
-# it, and the arithmetic of a `NestedLayout` being a larger type than a `LeafLayout` has nothing to do
-# with it either: a 16 × 24 set of the same 384 leaves costs 1.35 s bare and 13.84 s wrapped, exactly
-# as the flat one does.
+# Until 0.2.3 this was the expensive shape on Julia 1.11, and the cost was read as a cost of the
+# composition itself — a `@generated` body yielding a large type, composed across a function call with
+# a step that wraps it. It was not. `parameterlayout` on a flat 369-leaf set cost 1.35 s as a bare
+# `NamedTuple` and **13.40 s** inside a `NetworkParameters`; at 768 leaves, 2.77 s against **87.77 s**.
+# The cause was [`LeafLayout`](@ref)'s `prototype` type parameter, which put each leaf's concrete array
+# type into the layout type of every branch above it — 1849 nodes in the type tree of a 369-leaf
+# wrapped layout, against 742 without it. This method is where a caller paid for that, because it
+# infers through the child walk's whole return type to reach `ParametersLayout(inner)`, and inference
+# on such a type grows faster than the type does: 2.5 times the type was 13 times the time.
 #
-# Fusing it — one `@generated` body reading the children of `params(ps)` at literal indices and
-# building the `ParametersLayout` around them — is measured and is not what is wanted, because it
-# **moves** the cost rather than removing it. It takes `parameterlayout` from 13.59 s to 1.38 s at 369
-# wrapped and from 89.23 s to 2.81 s at 768, and puts every second of that into `flatten`: the whole
-# path — `parameterlayout`, then `flatten`, then `unflatten` — goes 22.41 s to 20.37 s, and a consumer
-# that calls only `flatten` and `unflatten` pays **twice as much**, 9.73 s against 20.73 s. The total
-# is what a consumer compiles, and the total does not depend on which method holds it: 21.66 s for the
-# bare 369 set and 22.41 s for the wrapped one.
+# With the parameter gone the two shapes cost the same — 1.05 s wrapped against 1.04 s bare at 369,
+# 3.01 s against 3.07 s at 768, 0.84 s against 0.85 s on a 16 × 24 set of the same 384 leaves — and so
+# do the three supported Julia versions: 1.05 s on 1.11, 1.13 s on 1.12, 1.03 s on 1.13, at 369 wrapped,
+# where the compat floor used to be the one that behaved differently. Nesting was never the driver and
+# is not one now, at 384 leaves in 16 branches against 369 in one.
 #
-# `@inline` here does nothing (13.67 s against 13.59 s), as `@noinline` does nothing on the branch
-# cases below. Nor is there anything to move on Julia 1.12 and 1.13, which do not distinguish the two
-# shapes: 1.78 s and 1.67 s at 369 wrapped. This is a characteristic of the compat floor and not of
-# the walk.
+# So there is nothing left here to move, and fusing the two steps into one `@generated` body — which
+# the note this replaces measured, and declined — answers a question that no longer arises.
 #
-# A caller that wants only the size should call `flatlength`, which returns an `Int` — nothing
-# downstream of it depends on the layout type, and it costs 1.26 s here where `parameterlayout` costs
-# 13.20 s.
+# What survives is where to look rather than what to change. **The total is what a consumer compiles,
+# and it does not depend on which method holds it.** On 0.2.2 the bare and wrapped paths split their
+# cost completely differently and still summed to nearly the same figure: 1.35 + 14.38 + 4.23 s bare
+# against 13.50 + 4.14 + 4.26 s wrapped, over `parameterlayout`, `flatten` and `unflatten`. Moving a
+# second out of one entry point puts it into another; taking the type parameter out took the whole
+# 369-wrapped path from 21.90 s to **8.64 s**.
+#
+# The six shape-against-shape figures are `scripts/leaf_layout_cost.jl` and the three-column splits are
+# `scripts/wide_branch_cost.jl`, one process per row in both. The two agree on the 369-wrapped row they
+# share to within a tenth of a second, 13.40 s against 13.50 s, which is the spread to read the rest at.
 function _layout(ps::NetworkParameters, offset::Int)
     inner, off = _layout(params(ps), offset)
     ParametersLayout(inner), off
@@ -162,11 +168,12 @@ end
 # wrapping a tuple you already hold in a `NamedTuple` and a struct — 0.13 s. Composing them across a
 # function call is neither: inference has to carry the whole 369-element tuple type from the callee
 # into the caller's own inference, and `parameterlayout` on that set cost **11.7 s**, of which
-# the child walk alone was 0.49 s of it and the wrapping was the rest. Fused into one body, and with
-# the leaf union below removed, it is **1.36 s**.
+# the child walk alone was 0.49 s of it and the wrapping was the rest. Fused into one body, with the
+# leaf union below removed and (since 0.2.3) the leaf's array type out of its layout type, it is
+# **1.04 s**.
 #
-# The container case above is that same composition, left standing on purpose. Fusing it is measured
-# too, and the note there says why it is the one place where fusing does not pay.
+# The container case above is that same composition, and it is left standing. The note there says why:
+# what made it expensive was not the composition.
 #
 # Measured every way round before settling on this. A `@noinline` barrier on the child walk does not
 # help (11.78 s). Neither does supplying `NestedLayout`'s type parameters instead of letting them be
@@ -242,7 +249,7 @@ end
 
 @inline function _leaf_layout(x, offset::Int)
     n = length(x)
-    LeafLayout((offset + 1):(offset + n), _leafsize(x), x), offset + n
+    LeafLayout((offset + 1):(offset + n), _leafsize(x)), offset + n
 end
 
 @inline function _wrapped_layout(x, s, offset::Int)
@@ -261,11 +268,13 @@ The number of entries `ps` flattens to, without allocating the flat vector.
 Deliberately not called `parameterlength`: `AbstractNeuralNetworks` has a function of that name for
 the parameter count of a *model*, and the two would collide on `using`.
 
-Cheaper to compile than the layout it walks, and on a large set the difference is the whole cost: this
-returns an `Int`, so nothing downstream of the call depends on the layout's type. On Julia 1.11 a
-369-leaf `NetworkParameters` costs **1.26 s** here against 13.20 s through [`parameterlayout`](@ref),
-and the figure does not move with the width or the nesting. Anything that wants only the size should
-call this; anything that has to unflatten later needs the layout and cannot.
+This returns an `Int`, so nothing downstream of the call depends on the layout's type. Anything that
+wants only the size should call it; anything that has to unflatten later needs the layout and cannot.
+
+That used to be a large difference in compile time as well — on Julia 1.11, 1.26 s here against 13.20 s
+through [`parameterlayout`](@ref) on a 369-leaf `NetworkParameters`. It is not one any more: 0.2.3 took
+that set to 1.05 s through `parameterlayout` against 1.03 s here. The reason to prefer this is the type
+it hands back, not the clock.
 """
 flatlength(ps) = length(parameterlayout(ps))
 flatlength(l::ParameterLayout) = length(l)
