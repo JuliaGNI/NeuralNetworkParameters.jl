@@ -205,9 +205,9 @@ end
 # costs one specialisation per child, and this one is on `flatten`'s path.
 @generated function _promote_eltypes(xs::Tuple)
     fieldcount(xs) == 0 && return :(Union{})
-    expr = :(parameter_eltype(xs[1]))
+    expr = :(parameter_eltype(getfield(xs, 1)))
     for i in 2:fieldcount(xs)
-        expr = :(promote_type($expr, parameter_eltype(xs[$i])))
+        expr = :(promote_type($expr, parameter_eltype(getfield(xs, $i))))
     end
     expr
 end

@@ -2,8 +2,7 @@
 #
 # Run with the repository as the active project:
 #
-#     julia --project=. scripts/wide_branch_cost.jl              # the width sweep
-#     julia --project=. scripts/wide_branch_cost.jl --cold-map    # `mapparameters` in a fresh session
+#     julia --project=. scripts/wide_branch_cost.jl
 #
 # This is the harness behind the two tables in the 0.2.2 CHANGELOG entry, committed because a number
 # is reproducible only where the code that produced it is. It reports *first-call* time, which is
@@ -14,10 +13,16 @@
 # child by retyping the tuple — which `Base.tail` does. The point of the sweep is that the exponent is
 # visible: doubling the width used to multiply `flatten`'s compile time by about eight.
 #
-# The order of the calls matters and is why `--cold-map` exists. A `flatten` that has already compiled
-# for a given branch shape leaves much less for `mapparameters` to do at the same shape, so the
-# `mapparameters` column below is measured *before* `flatten`, and the figure for a session that never
-# calls `flatten` at all comes from the second form.
+# **Every width runs in a process of its own**, and that is the methodology rather than a detail.
+# Compilation is shared across a session, so a `flatten` that has already compiled for one branch shape
+# leaves less for `mapparameters` to do at the same shape — and a sweep that walks the widths in one
+# process is measuring, from the second row on, what the first row already paid for.
+#
+# This script used to do exactly that, with a `--cold-map` flag to recover the honest figure on demand.
+# The flag was the tell: a number you have to remember to ask for in a special way is a number the
+# default run is getting wrong. `GeometricOptimizers` quoted the default one — `mapparameters` at
+# "0.00 s" on a 369-entry branch, against 1.51 s measured cold — and closed an issue on it. A table is
+# cold here or it is not printed.
 
 using NeuralNetworkParameters
 
@@ -46,43 +51,42 @@ _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 # worth fixing rather than noting.
 const WIDTHS = (16, 32, 48, 64, 128, 369)
 
-function sweep()
-    println(rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
-            rpad("mapparams", 11), rpad("flatten", 9), rpad("unflatten", 11),
-            "allocs flatten!/unflatten!")
+header() = println(rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
+                   rpad("mapparams", 11), rpad("flatten", 9), rpad("unflatten", 11),
+                   "allocs flatten!/unflatten!")
+
+# One width, in a process that has compiled nothing for it. Within the row the order still matters —
+# `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters` would absorb the
+# rest — so the rows are ordered cheapest-first and `flatten` comes after both.
+function sweep_one(k)
+    ps = wide_set(k)
+    t_layout = first_call(parameterlayout, ps)
+    t_map = first_call(x -> map(zero, x), ps)
+    t_mapp = first_call(x -> mapparameters(zero, x), ps)
+    t_flat = first_call(flatten, ps)
+
+    v, layout = flatten(ps)
+    t_unflat = first_call(x -> unflatten(layout, x), v)
+
+    buf = similar(v)
+    dest = unflatten(layout, zero(v))
+    _flatten_allocs(buf, ps, layout)          # warm the call and the measurement
+    _unflatten_allocs(dest, layout, v)
+    a_flat = _flatten_allocs(buf, ps, layout)
+    a_unflat = _unflatten_allocs(dest, layout, v)
+
+    println(rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
+            rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat)
+    flush(stdout)
+end
+
+# `--in-process k` is what the child processes are invoked with, and is not for interactive use.
+function fan_out()
+    header()
     for k in WIDTHS
-        ps = wide_set(k)
-        t_layout = first_call(parameterlayout, ps)
-        t_map = first_call(x -> map(zero, x), ps)
-        t_mapp = first_call(x -> mapparameters(zero, x), ps)
-        t_flat = first_call(flatten, ps)
-
-        v, layout = flatten(ps)
-        t_unflat = first_call(x -> unflatten(layout, x), v)
-
-        buf = similar(v)
-        dest = unflatten(layout, zero(v))
-        _flatten_allocs(buf, ps, layout)          # warm the call and the measurement
-        _unflatten_allocs(dest, layout, v)
-        a_flat = _flatten_allocs(buf, ps, layout)
-        a_unflat = _unflatten_allocs(dest, layout, v)
-
-        println(rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
-                rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat)
-        flush(stdout)
+        run(pipeline(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project())
+                      $(@__FILE__) --in-process $k`))
     end
 end
 
-# `mapparameters` on a wide branch in a session that has compiled nothing else for that shape. This is
-# the figure to quote when asking what the walk costs on its own.
-function cold_map()
-    println(rpad("children", 10), rpad("map(zero)", 11), "mapparameters(zero)")
-    for k in WIDTHS
-        ps = wide_set(k)
-        println(rpad(k, 10), rpad(first_call(x -> map(zero, x), ps), 11),
-                first_call(x -> mapparameters(zero, x), ps))
-        flush(stdout)
-    end
-end
-
-"--cold-map" in ARGS ? cold_map() : sweep()
+"--in-process" in ARGS ? sweep_one(parse(Int, ARGS[findfirst(==("--in-process"), ARGS) + 1])) : fan_out()

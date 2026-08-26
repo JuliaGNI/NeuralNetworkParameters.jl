@@ -23,10 +23,19 @@
 # shape slower still (3.2 s at 64) *and* costs 187 808 bytes, because the chain is what kept the
 # per-leaf `copyto!` statically dispatched.
 #
-# So `_children_across` writes the flat body out instead: one `@generated` expansion per branch shape,
-# `k` statements indexing `xs[1] … xs[k]` at *literal* indices. One specialisation instead of `k`, no
-# new tuple types at all, every index inferred at a constant, and the same straight-line code the
-# chain used to inline down to. See open issue D9 in the CHANGELOG for the numbers before and after.
+# So the across-children walks write the flat body out instead: one `@generated` expansion per branch
+# shape, `k` statements reading `getfield(xs, 1) … getfield(xs, k)` at *literal* indices. One
+# specialisation instead of `k`, no new tuple types at all, every index inferred at a constant, and
+# the same straight-line code the chain used to inline down to. They are `_foreach_zip`,
+# `_fold_children` and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and
+# `_unflatten_children!` in `flatten.jl`, the two branch cases of `_layout` in `layout.jl`,
+# `_promote_eltypes` in
+# `leaves.jl`, and `_accumulate_named!` and `_matching_named` on the reverse pass in `derivatives.jl`.
+#
+# **Writing a body out is not free, and one walk here does not.** It costs compilation per branch
+# shape, and for a walk that runs once rather than once per iteration that is the wrong trade — see
+# `_map_zip`, which hands branches wider than 32 children back to `Base.map` and says why at length.
+# The distinction to apply is not "wide or narrow" but "in an inner loop or not".
 
 """
     mapparameters(f, ps)
@@ -252,6 +261,28 @@ end
 # helpers
 # ---------------------------------------------------------------------------------------------------
 
+# The arity check the `Base.tail` chains used to get for free, by running out of `Tuple{}` methods.
+# Raised from the generated bodies, so it is a clear error at specialisation time rather than a
+# `MethodError` naming a tuple type nobody wrote.
+#
+# **This has to be defined before every generated body that calls it, and that is not a matter of
+# taste.** A `@generated` function's generator runs in the world age of its own method definition, so
+# a helper defined further down the file is invisible to it: the generator raises
+# `MethodError: no method matching _children_arity(…)  The applicable method may be too new`. Loading
+# a precompiled package hides this, because deserialising the cache gives every method in the module
+# one world age -- so it is only seen when the sources are evaluated, which is what
+# `--compiled-modules=no` does and what `test/world_age_tests.jl` pins. `src/flatten.jl`'s two callers
+# are covered by `walk.jl` being included first.
+function _children_arity(xs, rest...)
+    n = fieldcount(xs)
+    for (j, r) in enumerate(rest)
+        fieldcount(r) == n || throw(ArgumentError(string(
+            "parameter sets walked together must have the same number of children at every level; ",
+            "got ", n, " and, in argument ", j + 1, ", ", fieldcount(r), ".")))
+    end
+    n
+end
+
 @inline _as_namedtuple(x::NetworkParameters) = params(x)
 @inline _as_namedtuple(x::NamedTuple) = x
 @inline _as_namedtuple(x::Nothing) = nothing
@@ -273,9 +304,56 @@ end
     foldr((a, b) -> :($a || $b), tests)
 end
 
-# One method for both arities: with no `rest` the inner splat is empty and this is the plain map.
-@generated function _map_zip(recurse, f, xs, rest...)
-    n = _children_arity(xs, rest...)
+# The out-of-place walk, and **the one walk here that hands wide branches back to `Base.map`.**
+#
+# Every other across-children walk in this package is written out at every width, and this one is not,
+# because what they need and what it needs are different things. `_flatten_children!`,
+# `_unflatten_children!` and `_foreach_zip` run once per optimizer *iteration* or more, and
+# `_unflatten_children` runs once per objective evaluation through the closure a `Gradient` is built
+# from; for those, type stability and zero allocation are the property the package exists to provide,
+# and they are worth any amount of compilation. `_map_zip` is what `mapparameters` and `mapstorage`
+# are, and a consumer calls those once per cache, once per `changebackend`, once per `map_to_cpu` —
+# not per iteration.
+#
+# The cost of writing it out is real and it is paid per (function, branch shape) pair. Measured cold on
+# a flat 369-entry set, Julia 1.11.9: `map(zero, ps)` compiles in 0.01 s and a written-out
+# `mapparameters(zero, ps)` in 1.51 s. `GeometricOptimizers` reaches six such primitives while building
+# one `OptimizerCache`, which took that from 1.57 s to **71.16 s** on the parameter set of GMLDatasets'
+# MNIST transformer — a shape a consumer really has.
+#
+# `Base.map` has no such cliff because past 32 fields it drops to the `Any32` loop, and that fallback
+# is exactly what it costs: inference gives up on the result, and it allocates about 30 % more than the
+# written-out body (19 824 bytes against 15 424 at 128 children). For a walk that runs once, that buys
+# one dynamic dispatch at the call site — the *object* it returns is concretely typed either way, so
+# everything downstream of it specialises normally. For a walk in an inner loop it would buy one per
+# call, which is why the split is here and not everywhere.
+#
+# So: written out to 32 children, `map` beyond. 32 and not another number because it is the width
+# `Base` itself unrolls a tuple to, so below the threshold nothing is given up and above it nothing is
+# gained. A network's layer is far below it; the flat set that made D12 a defect is far above.
+#
+# (The closure `map` is handed here used to be the objection to it, and is no longer. `map` over a
+# closure was reported not to be elided on Julia 1.10, which is why the walks in this package became
+# `Base.tail` chains in the first place. On 1.11, 1.12 and 1.13 alike a closure costs nothing against a
+# plain function — 6240 bytes against 6224 at 40 children, 19 824 against 19 808 at 128 — so that
+# reason expired with the 1.10 floor.)
+const _WRITE_OUT_MAX_CHILDREN = 32
+
+# The branch is on `fieldcount` of a *type*, so it folds to a constant and only one arm is compiled.
+# It is here rather than inside the `@generated` body below because a generated function may not emit
+# a closure — "The function body AST defined by this @generated function is not pure" — and the `map`
+# arm needs one.
+@inline function _map_zip(recurse, f, xs, rest::Vararg{Any, N}) where {N}
+    _children_arity(typeof(xs), map(typeof, rest)...)
+    if fieldcount(typeof(xs)) > _WRITE_OUT_MAX_CHILDREN
+        map((cs...) -> recurse(f, cs...), xs, rest...)
+    else
+        _map_zip_written(recurse, f, xs, rest...)
+    end
+end
+
+@generated function _map_zip_written(recurse, f, xs, rest...)
+    n = fieldcount(xs)
     calls = [Expr(:call, :recurse, :f, :(getfield(xs, $i)),
                   (:(getfield(rest[$j], $i)) for j in 1:length(rest))...) for i in 1:n]
     :(($(calls...),))
@@ -303,17 +381,4 @@ end
         throw(ArgumentError(string("parameter sets have different keys: ", ks, " and ", keys(other))))
     end
     _check_keys(ks, Base.tail(nts))
-end
-
-# The arity check the `Base.tail` chains used to get for free, by running out of `Tuple{}` methods.
-# Raised from the generated bodies, so it is a clear error at specialisation time rather than a
-# `MethodError` naming a tuple type nobody wrote.
-function _children_arity(xs, rest...)
-    n = fieldcount(xs)
-    for (j, r) in enumerate(rest)
-        fieldcount(r) == n || throw(ArgumentError(string(
-            "parameter sets walked together must have the same number of children at every level; ",
-            "got ", n, " and, in argument ", j + 1, ", ", fieldcount(r), ".")))
-    end
-    n
 end

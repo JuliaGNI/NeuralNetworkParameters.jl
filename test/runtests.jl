@@ -21,6 +21,9 @@ end
 @safetestset "Wide branches             " begin
     include("wide_branch_tests.jl")
 end
+@safetestset "World age                 " begin
+    include("world_age_tests.jl")
+end
 @safetestset "Derivatives               " begin
     include("derivative_tests.jl")
 end
