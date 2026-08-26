@@ -100,6 +100,32 @@ they were not.
   remember: a figure is cold or it is not printed. That is the general lesson and it is cheap to state —
   **a measurement you have to ask for in a special way is one the default run is getting wrong.**
 
+  Re-measured with the corrected harness — see the entry below on `first_call` — on Julia 1.13.0-rc2,
+  Apple M4 Max, one process per width, seconds, `0.2.1 → 0.2.2`:
+
+  | children | `parameterlayout` | `mapparameters` | `flatten` | `unflatten` | **total** |
+  |---|---|---|---|---|---|
+  | 16 | 0.04 → 0.10 | 0.08 → 0.15 | 0.09 → 0.11 | 0.12 → 0.10 | 0.33 → **0.46** |
+  | 32 | 0.08 → 0.13 | 0.22 → 0.26 | 0.22 → 0.16 | 0.35 → 0.25 | 0.87 → **0.80** |
+  | 48 | 0.58 → 0.20 | 1.09 → 0.10 | 1.31 → 0.23 | 1.26 → 0.46 | 4.24 → **0.99** |
+  | 64 | 1.32 → 0.22 | 2.63 → 0.10 | 3.15 → 0.32 | 2.95 → 0.72 | 10.05 → **1.36** |
+  | 128 | 7.75 → 0.51 | 24.49 → 0.12 | 27.84 → 0.70 | 25.82 → 2.01 | 85.90 → **3.34** |
+  | 369 | not reached → 1.73 | → 0.17 | → 2.48 | → 19.27 | not reached → **24.65** |
+
+  The shape is the same as the 1.11.9 table above and the margin is wider, because the figures the old
+  harness printed were missing the inference that is most of the cost. 16 children is the one width
+  where 0.2.2 is behind, by 0.13 s, which is a written-out body being compiled where a chain of four
+  was not — the trade the `_map_zip` note describes, at the width where it does not pay.
+
+  **The harness had a second way of not measuring the thing, and forking per width did not touch it.**
+  `first_call` timed a direct `f(args...)`, and compiling `first_call` itself infers through the call in
+  its body — so the inference the figure is *for* was spent while `first_call` was being compiled, before
+  its own `t = time()` ran. On Julia 1.13 that reads **0.00 s for every width in every column**;
+  `parameterlayout` on a 369-child branch, measured through an opaque call, is 1.61 s and `flatten` is
+  3.95 s. The call goes through `Base.invokelatest` now, so there is nothing left for the caller's
+  compilation to do first. Same lesson as the fork, from the other end: the harness has to be arranged so
+  that the cost cannot have been paid somewhere the clock is not looking.
+
 - **`_layout` on a leaf inferred as a three-way union, and a branch of 369 of them was what
   `parameterlayout` cost.** The leaf method asked `freeparameters(x) === x` in an `if`, and that is a
   runtime pointer comparison inference cannot fold — so `_layout(::Matrix{Float32}, ::Int)` came back
@@ -144,6 +170,67 @@ they were not.
   materialised on the way in. This was found while fixing the entry above and is a separate defect:
   narrowing the branch made it disappear, which is why the docstrings' claim had held up in testing.
 
+- **`mapparameters!`, `mapstorage!` and `foreachparameters` had the same defect, on the arm that takes a
+  second set** — and they are the walks that run every optimizer iteration, where `flatten!` runs once
+  or twice. The entry above removed the temporary from the branch being walked; each *further* argument
+  was still turned into a `values(...)` tuple per branch by `_values_for`, and a skipped set into a
+  fresh `map(_ -> nothing, keys)` tuple on top of that. Bytes per call of `mapparameters!(f, dest, src)`
+  on Julia 1.13:
+
+  | children | 16 | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|---|
+  | 0.2.1 | 0 | 0 | 23 488 | 54 848 | 265 408 | not reached |
+  | first written here | 0 | 0 | 800 | 1 088 | 2 176 | 6 144 |
+  | **now** | 0 | 0 | **0** | **0** | **0** | **0** |
+
+  The middle row is the point rather than the top one: removing the temporary from the branch *being*
+  walked took 23 488 bytes at 48 children down to 800, which looks like the defect closing and is the
+  cliff simply moved. A branch of branches, where every child is a branch to take apart rather than an
+  array, cost 3 168 bytes at 48 and 23 840 at 369 on the middle row.
+
+  Same cliff at the same width, for the same reason. `_foreach_zip` reads every one of its arguments
+  with `getfield` at a literal index now; `_values_for` and `_tuple_for` have no callers and are gone.
+  Zero at 4, 16, 32, 48, 64, 128 and 369 children, flat and nested, at arity one, two and three, and on
+  the `nothing`-skip path.
+
+  Not caught by the wide-branch tests as first written, which did call `mapparameters!` at 369 children
+  and asserted only its result. Measuring it needs a **zero-argument closure**: `@allocated f(a, b)`
+  lowers to `Base.allocated(f, a, b)`, and for a `Vararg` method — which all three of these are — the
+  splat inside `Base.allocated` allocates on its own account, inventing bytes the walk does not spend
+  and hiding the ones it does. `test/wide_branch_tests.jl` says so beside the harness.
+
+- **The in-place walks paired the children of two branches by *position*.** `_values_for(x, ks)` ignored
+  its `ks`, so `foreachparameters(copyto!, (a = …, b = …), (b = …, a = …))` wrote each leaf from the
+  wrong key and said nothing, where `mapparameters` has always raised. Two same-shaped sets whose keys
+  are ordered differently — a gradient tree built by hand, or merged from parts — silently crossed over.
+
+  The generated body checks the keys of a named argument against the branch's own, in the *generator*,
+  so the guard `mapparameters` pays `_check_keys` for at run time is free here. **This is a behaviour
+  change**: positional pairing of differently-keyed sets now raises `ArgumentError`. A `Tuple` branch
+  stays positional, because the blocks of a multi-block leaf have no keys to agree on.
+
+- **`mapparameters` and `mapstorage` re-selected every child they were just handed.** Past 32 children
+  `_map_zip` hands back a `NamedTuple` already keyed with `keys(ps)`, and both then ran it through
+  `NamedTuple{keys(ps)}(...)` again — a second `k`-wide generated selection and a copy, 6 272 bytes of
+  the 57 120 a call costs at 369 children. `_rewrap_children` keys the written-out arm's `Tuple` and
+  leaves the `map` arm's `NamedTuple` alone.
+
+- **The reverse pass indexed leaf cotangents one element at a time.** `_add_leaf_cotangent!` accumulated
+  with `enumerate(Δ)` and a scalar `Δv[o + i] += x`, while `flatten`'s docstring makes a point of the
+  forward path never indexing an element, "so it runs at memory bandwidth and works unchanged for GPU
+  arrays". It broadcasts over the leaf's stretch of the flat vector now, at the same 848 and 6 208 bytes
+  at 48 and 369 children, and reaches a device array on the same terms the forward path does.
+
+- **The arity check allocated on `mapparameters`' own path.** `_children_arity` took an untyped `rest...`
+  and walked it with `enumerate`; every caller but one reaches it from a generator, where that is free,
+  and `_map_zip` reaches it at run time, where it cost 48 bytes a call. It takes the further sets as one
+  tuple now and checks them with a chain over the *arity* — one or two, never a branch width.
+
+- `_tuple_for(::Nothing, n::Int)` filled a positional branch with `ntuple(_ -> nothing, n)`, which
+  infers as `Tuple{Vararg{Nothing}}` past ten blocks — the same instability the comment in
+  `src/derivatives.jl` records removing from `_matching_positional`. The generated body splices the
+  `nothing`s in as literals, so there is no length left to be runtime about.
+
 - **The reverse pass had the same two defects**, on the walk that turns a cotangent in the shape of the
   parameters back into a flat gradient. `_accumulate_named!` was a `Base.tail` chain over
   `values(l.children)` and `keys(l.children)`; it is written out now, with the branch's keys spliced in
@@ -183,8 +270,10 @@ they were not.
 
 - `test/wide_branch_tests.jl`, which walks a 369-child branch through `flatten`/`unflatten`,
   `mapparameters` at both arities, `mapparameters!`, `foreachparameters` with and without the `nothing`
-  skip, `foldparameters` and `parameter_eltype`, and pins the in-place forms at zero allocations there.
-  It also covers 48, either side of the 32 fields `Base` unrolls a tuple up to.
+  skip, `foldparameters` and `parameter_eltype`, and pins **every** in-place form at zero allocations
+  there — `flatten!` and `unflatten!`, and `mapparameters!`, `mapstorage!` and `foreachparameters` at
+  arity one, two and three and on the `nothing`-skip path. It also covers 48, either side of the 32
+  fields `Base` unrolls a tuple up to.
 
   A 48-wide branch whose children are themselves branches is covered as well, and separately, because
   the two shapes fail differently: a flat branch's children are arrays, which are heap objects

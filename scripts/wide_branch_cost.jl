@@ -35,9 +35,19 @@ wide_set(k::Integer) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
 
 # `time()` and not `@elapsed`: the point is the very first call, and `@elapsed` in a loop reports the
 # second.
+#
+# **`invokelatest` and not a direct `f(args...)`, and that is the whole measurement rather than a
+# detail.** Compiling `first_call` itself infers through the call in its body — so with a direct call the
+# 1.6 s of inference that `parameterlayout` on a 369-child branch costs is spent while `first_call` is
+# being compiled, *before* `t = time()` ever runs, and the figure printed is 0.00 s. This script read
+# 0.00 s for every width and every column on Julia 1.13 until it was written this way. `invokelatest`
+# makes the call opaque, so there is nothing left for the caller's own compilation to do first.
+#
+# That is the same lesson as the one-process-per-width fix below, from the other end: the harness has to
+# be arranged so that the cost cannot have been paid somewhere the clock is not looking.
 function first_call(f, args...)
     t = time()
-    f(args...)
+    Base.invokelatest(f, args...)
     round(time() - t; digits = 2)
 end
 
@@ -46,6 +56,18 @@ end
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 
+# `mapparameters!` needs a **zero-argument** closure and not the two above. `@allocated f(a, b)` lowers
+# to `Base.allocated(f, a, b)`, and `mapparameters!` is a `Vararg` method — so the splat inside
+# `Base.allocated` allocates on its own account, which both invents bytes the walk does not spend and
+# hides the ones it does. `flatten!` is not a `Vararg` method, which is why the two above can be written
+# the obvious way. A thunk has nothing to splat.
+_thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
+
+# A destination-and-source walk, which is what an optimizer's elementwise primitives are, and the third
+# thing this sweep is for: `mapparameters!` took a `values(...)` tuple per branch per argument until the
+# walks began indexing them in place.
+_touch!(d, s) = (@inbounds d[begin] = s[begin]; nothing)
+
 # 32 is where `Base` stops unrolling a tuple; 369 is the parameter set of the MNIST transformer in
 # `scripts/geometric_optimizers/mnist.jl` of GMLDatasets.jl, which is the width that made the defect
 # worth fixing rather than noting.
@@ -53,7 +75,7 @@ const WIDTHS = (16, 32, 48, 64, 128, 369)
 
 header() = println(rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
                    rpad("mapparams", 11), rpad("flatten", 9), rpad("unflatten", 11),
-                   "allocs flatten!/unflatten!")
+                   "allocs flatten!/unflatten!/mapparameters!")
 
 # One width, in a process that has compiled nothing for it. Within the row the order still matters —
 # `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters` would absorb the
@@ -74,9 +96,10 @@ function sweep_one(k)
     _unflatten_allocs(dest, layout, v)
     a_flat = _flatten_allocs(buf, ps, layout)
     a_unflat = _unflatten_allocs(dest, layout, v)
+    a_mapp = _thunk_allocs(() -> mapparameters!(_touch!, dest, ps))
 
     println(rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
-            rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat)
+            rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat, "/", a_mapp)
     flush(stdout)
 end
 

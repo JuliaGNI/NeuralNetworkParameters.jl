@@ -40,6 +40,14 @@ nested_set(k) = NamedTuple{Tuple(Symbol("L", i) for i in 1:k)}(
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 
+# The `foreach` family has to be measured through a **zero-argument** closure, and that is not a
+# stylistic choice. `@allocated f(a, b)` lowers to `Base.allocated(f, a, b)`, and `foreachparameters`,
+# `mapparameters!` and `mapstorage!` are `Vararg` methods — so the splat inside `Base.allocated`
+# allocates on its own account, which both invents bytes these walks do not spend and hides the ones
+# they do. `flatten!` is not a `Vararg` method, which is why the two helpers above can be written the
+# obvious way. `@allocated thunk()` takes no arguments to splat.
+_thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
+
 @testset "flatten and unflatten reach a branch of $k children" for k in WIDTHS
     ps = wide_set(k)
     v, layout = flatten(ps)
@@ -92,6 +100,34 @@ end
     @test touched[] == 0
 end
 
+# The in-place walks at every arity, which is the half of D13 that `flatten!` and `unflatten!` do not
+# cover. Zipping two sets used to take `values` of each branch of *each* argument, which is the same
+# temporary per branch the forward walks stopped taking: `mapparameters!` cost 800 bytes a call on a
+# flat 48-child set and 6 144 at 369, and three to four times that on a branch of branches. These are
+# the walks an optimizer runs every iteration, where `flatten!` runs once or twice, so they are the
+# ones the guarantee is worth most on.
+@testset "the walks that take two sets do not allocate at $k children" for k in WIDTHS
+    ps = wide_set(k)
+    dest = mapparameters(zero, ps)
+    counted = Ref(0)
+    bump1(_) = (counted[] += 1; nothing)
+    bump2(_, _) = (counted[] += 1; nothing)
+    bump3(_, _, _) = (counted[] += 1; nothing)
+
+    @test _thunk_allocs(() -> foreachparameters(bump1, dest)) == 0
+    @test _thunk_allocs(() -> foreachparameters(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> mapparameters!(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> mapparameters!(bump3, dest, ps, ps)) == 0
+    @test _thunk_allocs(() -> mapstorage!(bump2, dest, ps)) == 0
+    # the `nothing` skip too: it used to fill the branch with a fresh tuple of `nothing`s per call
+    @test _thunk_allocs(() -> foreachparameters(bump2, dest, nothing)) == 0
+
+    # and the walk really ran, rather than being elided as the dead code a side-effect-free `f` is
+    @test counted[] > 0
+    mapparameters!(copyto!, dest, ps)
+    @test dest == ps
+end
+
 # 48 and not 369: the width is covered above, and what nesting adds is a branch whose children are
 # branches, which 48 is already well past the unrolling boundary for. A real consumer has one shape or
 # the other — the 369-child set is flat, and a network with a child per layer is dozens deep, not
@@ -110,6 +146,15 @@ end
     _unflatten_allocs(dest, layout, v)
     @test _flatten_allocs(buf, ps, layout) == 0
     @test _unflatten_allocs(dest, layout, v) == 0
+
+    # the two-set walks on the shape that has a branch to take apart at every child, which is where a
+    # temporary per branch per argument costs the most
+    counted = Ref(0)
+    bump2(_, _) = (counted[] += 1; nothing)
+    @test _thunk_allocs(() -> mapparameters!(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> mapstorage!(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> foreachparameters(bump2, dest, nothing)) == 0
+    @test counted[] > 0
 end
 
 @testset "a wide branch is a ParameterSet and a parameter tree" begin

@@ -123,13 +123,13 @@ end
 
 _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::Number) = (Δv[first(l.range)] += Δ; nothing)
 
+# Broadcast over the leaf's stretch of the flat vector and not a loop over its elements, for the reason
+# `flatten` copies with `copyto!`: an element of a leaf is never indexed individually, so the reverse
+# pass reaches a GPU array on the same terms the forward one does.
 function _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::AbstractArray)
     length(Δ) == length(l.range) || throw(DimensionMismatch(string(
         "cotangent of length ", length(Δ), " for a leaf of length ", length(l.range))))
-    o = first(l.range) - 1
-    for (i, x) in enumerate(Δ)
-        Δv[o + i] += x
-    end
+    @views Δv[l.range] .+= vec(Δ)
     nothing
 end
 

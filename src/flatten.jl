@@ -112,7 +112,7 @@ end
 # per branch, which at 64 children is where the last of the allocations were. `getfield(·, i)` reads
 # the child in place and serves a `NamedTuple` and a `Tuple` alike.
 @generated function _flatten_children!(v, xs, ls)
-    n = _children_arity(xs, ls)
+    n = _children_arity(xs, (ls,))
     calls = [:(_flatten!(v, getfield(xs, $i), getfield(ls, $i))) for i in 1:n]
     quote
         $(calls...)
@@ -235,7 +235,7 @@ function _unflatten!(x::Number, ::LeafLayout, _)
 end
 
 @generated function _unflatten_children!(xs, ls, v)
-    n = _children_arity(xs, ls)
+    n = _children_arity(xs, (ls,))
     calls = [:(_unflatten!(getfield(xs, $i), getfield(ls, $i), v)) for i in 1:n]
     quote
         $(calls...)

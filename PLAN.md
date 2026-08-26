@@ -151,9 +151,14 @@ checkouts, so §8 is now written as *where each package stands* rather than as a
 ## 4. Defects on record
 
 D1, D2, D3, D4, D7, D8, D9, D10, D11, D12, D13 and D14 are fixed — which is all of them but D5 and
-D6, and those two are open *in `GeometricOptimizers`* rather than here. D15 and D16 are new in this
-revision and are both defects of this package's own 0.2.2 work, found by running it rather than by
+D6, and those two are open *in `GeometricOptimizers`* rather than here. D15 through D19 are new in this
+revision and are all five defects of this package's own 0.2.2 work, found by running it rather than by
 reading it.
+
+**D17 and D18 came from reviewing 0.2.2 itself**, and the lesson is narrower than D16's and worth as
+much: D13 was fixed on the two walks the tests measured, and the three that take a second set were
+neither fixed nor measured — while being the walks that run every iteration rather than once. A
+guarantee holds where it is asserted and nowhere else.
 
 **Three entries in this table were stale when this revision began**, and all three in the same
 direction: D3, the `changebackend` half of D8, and D11 were recorded as open and had been fixed in
@@ -182,10 +187,13 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. Nothing existed for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/ext/HDF5Ext.jl` | **fixed** — `src/io.jl` owns the generic HDF5 path, so a nested parameter set serialises without anybody committing piracy |
 | D11 | `GeometricOptimizers.GlobalSection(ps::NetworkParameters)` — `GlobalSection` is GO's and `NetworkParameters` is this package's, so GML owns neither. Not in the original survey; it appeared when GML adopted the container while GO had not | was `GML/src/optimizers/optimizer.jl` | **fixed** — GO owns it, at `GO/src/global_sections/global_sections.jl:45`, and deliberately returns a plain `NamedTuple` tree rather than a container: a section is not a parameter |
 | D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s. Julia 1.11 is the compat floor as a consequence: 1.10 cannot inline a `@generated` body, and that inlining is what D13 needs |
-| D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width and every depth, on Julia 1.11, 1.12 and 1.13 |
+| D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width and every depth, on Julia 1.11, 1.12 and 1.13. See D17: the fix reached the two forward walks and not the three that take a second set |
 | D14 | The reverse pass had D13's defect too: 70 592 bytes per pullback call at 48 children, 161 504 at 64 | was `src/derivatives.jl` | **fixed, 0.2.2** — `_accumulate_named!` splices the branch's keys in as literals, which is also what keeps `_cotangent_get`'s `haskey` a compile-time question |
 | D15 | **The `@generated` walks raised `MethodError: … may be too new` when the sources are evaluated rather than loaded from a cache.** `_map_zip` and `_foreach_zip` called `_children_arity` from their *generator* bodies, and it was defined below them in the same file; a generator runs in the world age of its own method definition, so it was invisible. Precompilation hides this by giving every method in a module one world age, which is why the whole suite passed with it present | was `src/walk.jl:277,284` vs `:311` | **fixed, 0.2.2** — the helper is defined above every caller, and `test/world_age_tests.jl` runs the walks in a subprocess under `--compiled-modules=no`, which is the only way to ask |
 | D16 | **`scripts/wide_branch_cost.jl` swept its widths in one process, so every row but the first measured what its predecessors had compiled.** Every figure the 0.2.2 work first quoted was wrong — `flatten` on 0.2.1 at 128 children was recorded as 17.57 s against 2.08 s cold, and at 369 as "not run to completion" against 12.82 s, and `mapparameters` read as `0.00 s` where cold it was 1.51 s. `GeometricOptimizers` closed an issue of its own on that `0.00 s` and deleted a file on the strength of it | was `scripts/wide_branch_cost.jl` | **fixed, 0.2.2** — one process per width, and the `--cold-map` flag deleted with the need for it. A measurement you have to ask for in a special way is one the default run is getting wrong |
+| D17 | **D13 was fixed on the two walks that were measured and not on the three that were not.** `mapparameters!`, `mapstorage!` and `foreachparameters` turned each *further* argument into a `values(...)` tuple per branch, and a skipped one into a fresh tuple of `nothing`s — 800 bytes a call on a flat 48-child set, 6 144 at 369, and three to four times that on a branch of branches. These are the walks an optimizer runs every iteration, where `flatten!` runs once or twice | was `src/walk.jl:152,196,293-297` | **fixed** — `_foreach_zip` reads every argument with `getfield` at a literal index; `_values_for` and `_tuple_for` are gone. Zero at every width, depth and arity. Not caught because measuring a `Vararg` method needs a zero-argument closure: `@allocated f(a, b)` lowers to `Base.allocated(f, a, b)`, whose own splat allocates |
+| D18 | **The in-place walks paired the children of two keyed branches by *position*.** `_values_for(x, ks)` ignored its `ks`, so two same-shaped sets whose keys were ordered differently wrote every leaf into the wrong parameter without a word, where `mapparameters` has always raised | was `src/walk.jl:293` | **fixed** — the generated body checks a named argument's keys against the branch's own, in the generator, so the guard is free at run time and stricter than `_check_keys`. A behaviour change: positional pairing of differently-keyed sets now raises |
+| D19 | **`scripts/wide_branch_cost.jl` still was not measuring compile time after D16.** `first_call` timed a direct `f(args...)`, and compiling `first_call` infers through that call — so the inference being timed was spent before its own `t = time()` ran. On Julia 1.13 the committed harness printed 0.00 s for every width in every column, where an opaque call measures 1.61 s for `parameterlayout` and 3.95 s for `flatten` at 369 children | was `scripts/wide_branch_cost.jl:38-42` | **fixed** — the call goes through `Base.invokelatest`. D16 and this are the same lesson from two ends: arrange the harness so the cost cannot have been paid somewhere the clock is not looking |
 
 D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
 at different times. With the structured types upstream of the package that trains with them, a
@@ -286,10 +294,9 @@ Design points worth keeping in view:
 ### Verification
 
 ```bash
-julia --project -e 'using Pkg; Pkg.test()'                                            # 388 tests
+julia --project -e 'using Pkg; Pkg.test()'                                            # 424 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
-julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13
-julia --project=. scripts/wide_branch_cost.jl --cold-map                              # D12, cold
+julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17
 ```
 
 It also covers a **369-child branch** — the width of GMLDatasets' MNIST transformer, and the shape D12,
