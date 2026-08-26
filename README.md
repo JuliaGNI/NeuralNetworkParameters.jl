@@ -96,8 +96,8 @@ upstream of the package that trains with them without anybody committing piracy.
 
 See the [documentation](https://JuliaGNI.github.io/NeuralNetworkParameters.jl/dev/) for the full
 picture: the two representations, the conversions and what a layout records, the leaf protocol, the
-tree walks (`mapparameters`, `mapstorage`, `foreachparameters`, `foldparameters`), reading and writing
-HDF5, and the library reference.
+tree walks (`mapparameters`, `mapstorage`, `foreachparameters`, `foldparameters`, `foldstorage`),
+reading and writing HDF5, and the library reference.
 
 ## Development
 

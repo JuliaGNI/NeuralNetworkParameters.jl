@@ -127,6 +127,81 @@ end
         a = [1.0, 2.0], b = [3.0]))) == 6.0
 end
 
+# The zipped arities, which is what `mapparameters` has always had and the fold did not. A consumer
+# wanting ∑ᵢaᵢbᵢ or ∑ᵢf(aᵢ)² over a parameter set had to write the recursion itself, and
+# `GeometricOptimizers` wrote three — see issue #19.
+@testset "a zipped fold pairs the leaves" begin
+    a = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],)))
+    b = mapparameters(x -> 2x, a)
+
+    # the inner product of the two, taken without flattening either
+    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b) == 2 * (1 + 4 + 9 + 16)
+    # and at arity three, since nothing about the walk stops at two
+    @test foldparameters((acc, x, y, z) -> acc + sum(x .* y .* z), 0.0, a, b, b) ==
+          4 * (1 + 8 + 27 + 64)
+    # a `NamedTuple` and a `NetworkParameters` pair, as they do for the other walks
+    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, params(b)) == 2 * 30
+
+    # the fold still visits in the order `flatten` writes, at every arity
+    paired = foldparameters((v, x, y) -> append!(v, vec(x .* y)), Float64[], a, b)
+    @test paired == 2 .* first(flatten(a)) .^ 2
+end
+
+@testset "foldstorage folds the storage and not the leaf" begin
+    # whole leaves count the dense length above; the storage counts what `flatten` writes
+    @test foldstorage((n, x) -> n + length(x), 0, ps) == flatlength(ps)
+    @test foldstorage((v, x) -> append!(v, vec(x)), Float64[], ps) == first(flatten(ps))
+
+    # a multi-block leaf pairs block by block, and its structured block by its stored numbers
+    doubled = mapstorage(x -> 2x, ps)
+    @test foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, ps, doubled) ==
+          2 * sum(abs2, first(flatten(ps)))
+end
+
+# A hole where a leaf keeps its storage behind an interface. `mapparameters` and `foldparameters` hand
+# the whole leaf and the `nothing` to the caller and are done; the storage walks have to descend, and
+# used to descend by asking the hole for its `freeparameters` — which answered with the leaf protocol's
+# own error, telling the caller to define `freeparameters(::Nothing)`.
+@testset "a nothing leaf reaches the storage walks too" begin
+    holes = NetworkParameters((L1 = (W = nothing, b = nothing), L2 = (S = nothing,),
+        L3 = (G = ps.L3.G,)))
+
+    # the storage of a `Sym` is one array, so there is exactly one thing to pair the hole with, and
+    # `op` sees it: 2 + 1 numbers from `L1` and 3 from `L2`, with `L3` paired against itself
+    @test foldstorage((acc, x, y) -> y === nothing ? acc + length(x) : acc, 0, ps, holes) == 6
+    @test mapstorage((x, y) -> y === nothing ? zero(x) : x, ps, holes).L2.S.S == zeros(3)
+
+    # a hole against a *multi-block* leaf raises instead: one `nothing` cannot stand for each block,
+    # and each walk says so in its own terms rather than in the leaf protocol's
+    gaps = NetworkParameters((L1 = (W = nothing, b = nothing), L2 = (S = nothing,),
+        L3 = (G = nothing,)))
+    @test_throws "partial sum" foldstorage((acc, x, y) -> acc, 0.0, ps, gaps)
+    @test_throws "nothing to put" mapstorage((x, y) -> x, ps, gaps)
+end
+
+@testset "a fold rejects what it cannot reduce" begin
+    a = NetworkParameters((L1 = [1.0], L2 = [2.0]))
+
+    # by key and not by position, which is the guarantee `mapparameters!` gained in D18
+    @test_throws "different keys" foldparameters(
+        (acc, x, y) -> acc, 0.0, a, NetworkParameters((L2 = [1.0], L1 = [2.0])))
+    @test_throws "same number of children" foldparameters(
+        (acc, x, y) -> acc, 0.0, ([1.0], [2.0]), ([1.0],))
+
+    # a set that is `nothing` is an error and not a skip: a fold reduces every leaf it is given, so
+    # leaving one out would make the result a partial sum without saying so
+    @test_throws "partial sum" foldparameters((acc, x, y) -> acc, 0.0, a, nothing)
+    @test_throws "partial sum" foldstorage((acc, x, y) -> acc, 0.0, a, nothing)
+    @test_throws "partial sum" foldparameters(
+        (acc, x, y) -> acc, 0.0, NetworkParameters((L = (x = [1.0],),)),
+        NetworkParameters((L = nothing,)))
+
+    # a `nothing` *leaf* still reaches `op`, exactly as it reaches `f` in `mapparameters`: deciding
+    # what a missing leaf contributes is the caller's to make
+    @test foldparameters((acc, x, y) -> y === nothing ? acc : acc + sum(y), 0.0,
+        a, NetworkParameters((L1 = [10.0], L2 = nothing))) == 10.0
+end
+
 @testset "a mapped tree takes its element type from what the map returned" begin
     @test mapstorage(x -> Float32.(x), ps) isa NetworkParameters{Float32}
     @test mapparameters(x -> Float32.(x), ps) isa NetworkParameters{Float32}

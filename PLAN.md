@@ -2,12 +2,12 @@
 
 Analysis last revised 2026-08-26, against these working trees. The whole family moves in one wave and
 only this package's dependency, `ChainRulesCore`, is outside it. Two rows have landed on `main` since
-the wave began — this package's 0.2.3 and `GeometricOptimizers`' 0.6.0 — and the rest are still
+the wave began — this package's 0.2.4 and `GeometricOptimizers`' 0.6.0 — and the rest are still
 branches, so read the third column before quoting a version as released.
 
 | package | version | branch |
 |---|---|---|
-| `NeuralNetworkParameters` | 0.2.3 | this repository, `main` |
+| `NeuralNetworkParameters` | 0.2.4 | this repository, `main` |
 | `GeometricBase` | 0.14.9 | `l2norm-over-any-array-and-julia-1.11` |
 | `SimpleSolvers` | 0.13.1 | `retire-the-1.10-getrf-fallback` |
 | `AbstractNeuralNetworks` | 0.7.2 | `adopt-parameterset` |
@@ -202,7 +202,7 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/src/layers/forcing_dissipation_layers.jl` | **fixed, phase 1** — `src/parameters.jl:162` |
 | D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. Nothing existed for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/ext/HDF5Ext.jl` | **fixed** — `src/io.jl` owns the generic HDF5 path, so a nested parameter set serialises without anybody committing piracy |
 | D11 | `GeometricOptimizers.GlobalSection(ps::NetworkParameters)` — `GlobalSection` is GO's and `NetworkParameters` is this package's, so GML owns neither. Not in the original survey; it appeared when GML adopted the container while GO had not | was `GML/src/optimizers/optimizer.jl` | **fixed** — GO owns it, at `GO/src/global_sections/global_sections.jl:45`, and deliberately returns a plain `NamedTuple` tree rather than a container: a section is not a parameter |
-| D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s. Julia 1.11 is the compat floor as a consequence: 1.10 cannot inline a `@generated` body, and that inlining is what D13 needs |
+| D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s. Julia 1.11 is the compat floor as a consequence: 1.10 cannot inline a `@generated` body, and that inlining is what D13 needs. **Two things `GeometricOptimizers` [#70](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/70) adds, one confirming this account and one qualifying it.** Its three quadrature folds carry **no `@inline` at all**, deliberately, and hit the same cliff at the same width — so the cliff is not conditional on the `@inline`, which is independent confirmation from the other end of 0.2.2's finding that removing it did not help. But the **Julia version matters more than this entry implies**: an un-`@inline`d `Base.tail` fold at 369 children is 0.65 s on 1.11.9 and 26 to 35 s on 1.12.7 and 1.13.0-rc3. D12 was diagnosed on walks that were written out for every version, so the interaction never showed here. Anyone reasoning from this entry to a *new* `Base.tail` walk must not conclude that going without the `@inline` is safe on 1.11 evidence |
 | D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width and every depth, on Julia 1.11, 1.12 and 1.13. See D17: the fix reached the two forward walks and not the three that take a second set |
 | D14 | The reverse pass had D13's defect too: 70 592 bytes per pullback call at 48 children, 161 504 at 64 | was `src/derivatives.jl` | **fixed, 0.2.2** — `_accumulate_named!` splices the branch's keys in as literals, which is also what keeps `_cotangent_get`'s `haskey` a compile-time question |
 | D15 | **The `@generated` walks raised `MethodError: … may be too new` when the sources are evaluated rather than loaded from a cache.** `_map_zip` and `_foreach_zip` called `_children_arity` from their *generator* bodies, and it was defined below them in the same file; a generator runs in the world age of its own method definition, so it was invisible. Precompilation hides this by giving every method in a module one world age, which is why the whole suite passed with it present | was `src/walk.jl:277,284` vs `:311` | **fixed, 0.2.2** — the helper is defined above every caller, and `test/world_age_tests.jl` runs the walks in a subprocess under `--compiled-modules=no`, which is the only way to ask |
@@ -212,6 +212,7 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D19 | **`scripts/wide_branch_cost.jl` still was not measuring compile time after D16.** `first_call` timed a direct `f(args...)`, and compiling `first_call` infers through that call — so the inference being timed was spent before its own `t = time()` ran. On Julia 1.13 the committed harness printed 0.00 s for every width in every column, where an opaque call measures 1.61 s for `parameterlayout` and 3.95 s for `flatten` at 369 children | was `scripts/wide_branch_cost.jl:38-42` | **fixed** — the call goes through `Base.invokelatest`. D16 and this are the same lesson from two ends: arrange the harness so the cost cannot have been paid somewhere the clock is not looking |
 | D20 | **The wide-branch tests and the sweep script measure a bare `NamedTuple`, and a consumer holds a `NetworkParameters`.** The two reach `parameterlayout` through different methods and, on Julia 1.11, cost wildly different amounts on the same leaves: 1.35 s bare against 13.40 s wrapped at 369, 2.77 s against 87.77 s at 768. So the 0.2.2 table reports the cheap column, and issue [#16](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16) read the gap between the two as a cost of *nesting* — which it is not: a flat 369-leaf set and a 16 × 24 one cost the same 1.35 s bare and the same 13.8 s wrapped | was `test/wide_branch_tests.jl:27`, `scripts/wide_branch_cost.jl:32` | **fixed** — the sweep runs both shapes at every width, each in its own process, and `test/wide_branch_tests.jl` asserts the round trip and the zero allocations on the wrapped shape. This entry closed on the measurement without a cause, and recorded that no code needed to change on the grounds that the whole path cost nearly the same either way (19.96 s bare, 21.90 s wrapped at 369) so the wrapper only decided which entry point paid. **That was where to look and not what to conclude**: the gap had a cause, D21 is it, and 0.2.3 removed it. The two columns agree now |
 | D21 | **`LeafLayout` carried a `prototype` field that nothing read, and it was the cost D20 measured.** A `LeafLayout` is by construction the terminal case, so `rebuild` on it is the identity and is never called — but the field's type parameter put each leaf's *concrete array type* into the layout type of every branch above it, 1849 nodes in the type tree of a 369-leaf wrapped layout against 742 without. `_layout(::NetworkParameters, ::Int)` is where a caller paid for it, inferring through the child walk's whole return type to wrap its result, and inference on such a type grows faster than the type does: 2.5 times the type was 13 times the time. The bare column never showed it, because only the wrapped shape has such a caller — which is exactly why D20's two-column sweep was needed to find it and D20's own conclusion was not | was `src/layout.jl:29` | **fixed, 0.2.3** — the struct is `LeafLayout{N}` over `range` and `size`. `parameterlayout` on a 369-leaf set inside a `NetworkParameters` goes 13.40 s → 1.05 s and at 768 leaves 87.77 s → 3.01 s, the whole 369-wrapped path 21.90 s → 8.64 s, and Julia 1.11, 1.12 and 1.13 agree at 1.05/1.13/1.03 s where the compat floor used to be the one that behaved differently. `scripts/leaf_layout_cost.jl` is the harness. Issue [#15](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/15) filed it as hygiene and said explicitly it was not the cause: it had compared two leaf *sets* under one layout type, never the layout type with and without the parameter |
+| D22 | **`scripts/wide_branch_cost.jl` did not sweep the fold.** It timed `parameterlayout`, `map(zero, ·)`, `mapparameters`, `flatten` and `unflatten` and the in-place allocations, at both shapes and every width, and not `foldparameters` at either. That was the one walk whose downstream analogue had just produced a two-orders-of-magnitude compile cliff, and the only thing standing in for a figure was the total wall clock of a suite that folds 369 children while asserting the value alone. D16 and D19 are the same lesson about the clock; this is it about an argument | was `scripts/wide_branch_cost.jl` | **fixed, 0.2.4** — three columns, `fold`, `foldzip` and a `tailfold` control that is the `Base.tail` recursion a consumer writes without a zipped fold. Filed as part 2 of issue [#19](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19) |
 
 D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
 at different times. With the structured types upstream of the package that trains with them, a
@@ -259,7 +260,7 @@ copy semantics, with allocation-free in-place variants for inner loops.
 |---|---|
 | `src/parameters.jl` | `NetworkParameters`, `params`, `ParameterSet`, and the `NamedTuple` forwarding |
 | `src/leaves.jl` | `freeparameters`, `rebuild`, `parameter_metadata`, `parameter_eltype`, `isterminal`, `isparametertree` |
-| `src/walk.jl` | `mapparameters`, `mapstorage`, the in-place and `foreach` forms, `foldparameters` |
+| `src/walk.jl` | `mapparameters`, `mapstorage`, the in-place and `foreach` forms, `foldparameters` and `foldstorage`, all of them at any arity |
 | `src/layout.jl` | `ParameterLayout` and its five concrete cases, `parameterlayout`, `parameterrange`, `flatlength` |
 | `src/flatten.jl` | `flatten`, `flatten!`, `unflatten`, `unflatten!`, and the Jacobian split |
 | `src/flat_parameters.jl` | `FlatParameters`, the `AbstractVector` interface, layout-preserving `similar` and broadcasting |
@@ -312,9 +313,9 @@ Design points worth keeping in view:
 ### Verification
 
 ```bash
-julia --project -e 'using Pkg; Pkg.test()'                                            # 440 tests
+julia --project -e 'using Pkg; Pkg.test()'                                            # 479 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
-julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20
+julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20/D22
 julia --project=. scripts/leaf_layout_cost.jl                                         # D21
 ```
 
@@ -332,11 +333,12 @@ holds. A row run alone and the same row inside the sweep have to read the same.
 
 It also covers a **369-child branch** — the width of GMLDatasets' MNIST transformer, and the shape D12,
 D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at both arities,
-`mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters`, the
-`unflatten` pullback, and the in-place forms at zero allocations, and a 48-child one inside a
-`NetworkParameters` for the same round trip and the same zero allocations. It asserts the properties and not the
-timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
-the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
+`mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters` and
+`foldstorage` at both arities, the `unflatten` pullback, and the in-place forms at zero allocations,
+and a 48-child one inside a `NetworkParameters` for the same round trip and the same zero
+allocations. It asserts the properties and not the timings, because a wall-clock bound would be a
+flake on a loaded machine; the regression test is that the file *completes*, which before 0.2.2 it
+did not. It costs the suite about 45 s on Julia 1.13 and
 about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
 width a consumer has rather than the width that is convenient.
 

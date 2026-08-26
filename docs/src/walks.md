@@ -20,6 +20,7 @@ mapparameters!
 mapstorage!
 foreachparameters
 foldparameters
+foldstorage
 ```
 
 ## Whole leaves or their storage
@@ -90,3 +91,26 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 
 5
 ```
+
+A fold takes further sets in lockstep as the other walks do, which is how an inner product or a
+quadrature norm over a parameter set is computed without flattening it first — one number out, and no
+flat vector of either set on the way. The walk itself allocates nothing at any width, depth or arity;
+what `op` spends is `op`'s own, and the broadcast below builds a temporary per leaf:
+
+```jldoctest walks
+foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
+
+# output
+
+50.0
+```
+
+[`foldstorage`](@ref) is the same walk over the [`freeparameters`](@ref) of each leaf, which is the
+level `flatten` writes: the pairing of a symmetric matrix is over the ``n(n+1)/2`` numbers it stores,
+where reading its dense interface would count every off-diagonal entry twice.
+
+A set that is `nothing` is an error here rather than a skip. A fold reduces every leaf it is given, so
+leaving one out would make the answer a partial sum without saying so; walk such a tree with
+[`foreachparameters`](@ref) and accumulate into a `Ref` if that is what is wanted. A `nothing` in
+place of a single *leaf* is not the same thing and still reaches `op`, which is what lets the caller
+decide what a missing leaf contributes.

@@ -4,6 +4,122 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] — 2026-08-26
+
+**The fold takes several sets in lockstep, as every other walk here already did.**
+`foldparameters(op, init, ps)` walked one tree, so a consumer wanting `sum(aᵢ * bᵢ)` or
+`sum(f(aᵢ)^2)` over a parameter set had to write the recursion itself. `GeometricOptimizers` wrote
+three — `l2norm`, `solution_scale` and `_dot`, as `Base.tail` chains — and they cost it 26 to 71 s to
+compile at 369 children on Julia 1.12 and 1.13, against 0.65 to 1.47 s on 1.11.9. None of that is this
+package's code, and the figures below are not a regression being fixed: they are the argument for the
+walk living here rather than being written again by every consumer. Issue [#19].
+
+### Added
+
+- **`foldparameters(op, init, ps, rest...)`.** The trees are walked in lockstep and `op` receives one
+  leaf from each: `op(acc, a_leaf, b_leaf, …)`, at any arity. The children of a keyed branch are
+  paired **by key** and the keys and the widths are checked in the generator, where they cost nothing
+  — the guarantee the in-place walks gained in 0.2.2, and stricter than the `_check_keys` that
+  `mapparameters` pays for at run time. Allocation-free at every width, depth and arity.
+
+  A set that is `nothing` **raises**, where `foreachparameters` skips one: a fold reduces every leaf
+  it is given, so a set left out would make the answer a partial sum without saying so. A `nothing`
+  *leaf* is a different thing and still reaches `op`, so a caller who wants to decide what a missing
+  leaf contributes still can — including where the leaf keeps its storage behind an interface, which
+  is the **Fixed** entry below.
+
+- **`foldstorage(op, init, ps, rest...)`**, which is the same walk over the `freeparameters` of each
+  leaf, and the level `flatten` writes. The inner product of two sets with a symmetric leaf is over
+  the n(n+1)/2 numbers it stores; a dense reading would count every off-diagonal entry twice, and for
+  a skew-symmetric or triangular leaf there is no dense reading at all. It completes the pairs the
+  rest of the file has: `mapparameters`/`mapstorage`, `mapparameters!`/`mapstorage!`, and now
+  `foldparameters`/`foldstorage`.
+
+- **Both are one `@generated` body**, `_fold_zip`, at literal indices — the treatment the other eight
+  across-children walks got in 0.2.2, now including the arity that did not exist before. `kind`
+  selects which of the two `_fold_step` continues with, exactly as it does for the `foreach` family.
+
+### Fixed
+
+- **A `nothing` in place of a leaf reached the storage walks as the leaf protocol's own error.**
+  `foldstorage` and `mapstorage` have to descend into a leaf that keeps its storage behind an
+  interface, and they descended by asking every further set's leaf for its `freeparameters` — so a
+  hole was asked where its storage lives, and the protocol answered the only way it can:
+
+  ```
+  ArgumentError: no method of `freeparameters` for `Nothing`.
+      NeuralNetworkParameters.freeparameters(::Nothing) = ...
+  ```
+
+  which is the one instruction that is not the fix. The hole survives the descent now. A `nothing`
+  against a leaf whose storage is a single array — a `SymmetricMatrix`, a manifold element, a
+  horizontal lift — reaches `op` or `f` paired with that array, which is what the docstrings say and
+  what `mapparameters` and `foldparameters` already did with the whole leaf. A `nothing` against a
+  **multi-block** leaf has nothing to pair one-to-one with and raises each walk's own error instead:
+  the partial-sum error for the fold, and for `mapstorage` the one that names the three walks which
+  skip a hole. `mapstorage` carried this since the storage walks were written; it is one line from
+  the fold's and has the same cause, so it is fixed here.
+
+- **`scripts/wide_branch_cost.jl` did not sweep the fold.** It timed `parameterlayout`,
+  `map(zero, ·)`, `mapparameters`, `flatten`, `unflatten` and the in-place allocations, at both shapes
+  and every width, and the fold at neither — which was the one walk whose downstream analogue had just
+  produced a two-orders-of-magnitude cliff. `test/wide_branch_tests.jl` folds 369 children but asserts
+  only the value, so what stood in for a figure was the suite's total wall clock. Three columns now:
+  `fold` and `foldzip` are `foldparameters` at arity one and two, and `tailfold` is the `Base.tail`
+  recursion over `values` a consumer writes without a zipped fold.
+
+  First call, one process per row, bare `NamedTuple` of 369 leaves. The wrapped column reads the same
+  to the spread of a single cold measurement — within 0.06 s on the fold columns, and 28.20 s against
+  28.55 s and 37.74 s against 37.86 s on the control:
+
+  | Julia | `fold` | `foldzip` | `tailfold` |
+  |---|---|---|---|
+  | 1.11.9 | 2.11 s | 0.35 s | 1.94 s |
+  | 1.12.7 | 0.80 s | 1.08 s | **28.55 s** |
+  | 1.13.0-rc3 | 0.47 s | 0.63 s | **37.86 s** |
+
+  **On 1.11 the control is the cheaper of the two**, and that is worth stating plainly: 1.94 s against
+  2.11 s for the written-out fold at arity one. The case for writing it out is not that it wins at the
+  compat floor; it is that it costs about the same everywhere and *falls* with each version, while the
+  chain multiplies by fifteen and then by twenty. `tailfold` is also measured last in its row, so
+  everything it shares with the columns above it is already compiled — the gap is if anything
+  understated.
+
+  The two fold columns are the whole cost of the arity: 2.46 s together on 1.11, and one `tailfold` is
+  one shape of one fold, of which `GeometricOptimizers` has three.
+
+### Unchanged
+
+- **Nothing in `src/` changed on account of the `@inline` question.** `GeometricOptimizers`' three
+  folds carry no `@inline` at all and hit the cliff at the same width, which confirms from the other
+  end what 0.2.2 recorded — that dropping the `@inline` from the walks here did not help either. What
+  it qualifies is the *version*: 0.2.2's account of D12 was written on walks that were written out for
+  every Julia, so it never showed that an un-`@inline`d `Base.tail` fold is 0.65 s on 1.11.9 and 26 to
+  35 s on 1.12.7 and 1.13.0-rc3. `PLAN.md`'s D12 entry now says so, since it is where someone will
+  look before writing the next `Base.tail` walk in this ecosystem.
+
+- The `foldparameters` docstring carries one thing a consumer has to do, because this package cannot
+  do it for them: **a function that hands `op` on has to annotate it `::F where {F}`.** Julia does not
+  specialise on a function argument it never sees called, so without it `op` arrives boxed and every
+  leaf costs a dynamic dispatch — 3 088 bytes a call on a 369-leaf set at arity one, 6 160 at arity
+  two, against zero with it, on 1.11.9 and 1.13.0-rc3 alike. Annotating the methods *here* changes
+  none of those figures, which is why they are not annotated; the boxing is the caller's. A closure
+  that captures a function needs nothing, a closure being its own type — so
+  `foldparameters((acc, x) -> acc + abs2(f(x)), 0, ps)` is how a function of each leaf is folded, and
+  no second function argument is needed. `test/wide_branch_tests.jl` pins **both** halves of that —
+  the annotated caller at zero and the otherwise identical unannotated one above zero — so the
+  instruction this package gives its consumers cannot go stale behind a green suite.
+
+### Noticed and not addressed
+
+- **`unflatten` at 369 children costs 4.35 s on Julia 1.11.9, 13.85 s on 1.12.7 and 18.32 s on
+  1.13.0-rc3**, in both shapes. It is the one column of the sweep that grows with the Julia version
+  rather than shrinking, and it is not this release's doing: 0.2.3's own script, run on the same
+  machine at the same width, reads 4.49 s, 13.75 s and 18.30 s. That comparison is also what says the
+  three new columns do not perturb the row they were added to — `layout` reads 1.06/1.13/1.06 s
+  against 1.03/1.11/1.05, and `flatten` 3.73/2.20/2.05 against 3.70/2.22/2.06. Nothing here is changed
+  for it; it is recorded so that the next person to read the table does not have to rediscover it.
+
 ## [0.2.3] — 2026-08-26
 
 **The cost of a wrapped parameter set was one unused type parameter.** 0.2.2 made a wide branch
@@ -545,6 +661,8 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 [#15]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/15
 [#16]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16
 [#18]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/18
+[#19]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19
+[0.2.4]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.4
 [0.2.3]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.3
 [0.2.2]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.2
 [0.2.1]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.1
