@@ -128,3 +128,34 @@ NNP.parameter_eltype(b::Blocks) = parameter_eltype(freeparameters(b))
     @test ps isa NetworkParameters{Float64}
     @test first(flatten(ps)) == [1.0, 2.0]
 end
+
+# A leaf whose storage has a *different* element type from the interface it presents: an
+# `AbstractMatrix{Float64}` over a `Vector{Float32}`. Contrived — every structured type in the
+# ecosystem stores what it presents — and pinned all the same, because it is the case that separates
+# following `freeparameters` from reading the leaf's type. Deciding the promotion in
+# `_promote_eltypes`' generator by settling an `AbstractArray` child with `eltype`, as issue #22
+# proposes, reports `Float64` here and flattens these three numbers into a vector twice as wide.
+struct Widened{T} <: AbstractMatrix{T}
+    S::Vector{Float32}
+end
+
+Base.size(::Widened) = (2, 2)
+Base.getindex(A::Widened{T}, i::Int, j::Int) where {T} = T(A.S[max(i, j)])
+
+NNP.freeparameters(A::Widened) = A.S
+NNP.rebuild(::Widened{T}, data) where {T} = Widened{T}(data)
+
+@testset "the promotion follows the storage, not the interface" begin
+    A = Widened{Float64}(Float32[1, 2, 3])
+    @test eltype(A) === Float64
+    @test parameter_eltype(A) === Float32
+    @test parameter_eltype((L1 = (W = A,),)) === Float32
+
+    # and `flatten` writes what the numbers are rather than what the interface says
+    ps = NetworkParameters((L1 = (W = A,),))
+    @test ps isa NetworkParameters{Float32}
+    v, layout = flatten(ps)
+    @test v == Float32[1, 2, 3]
+    @test v isa Vector{Float32}
+    @test unflatten(layout, Float32[4, 5, 6]).L1.W isa Widened{Float64}
+end

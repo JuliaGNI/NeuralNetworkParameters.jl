@@ -3,11 +3,12 @@
 Analysis last revised 2026-08-26, against these working trees. The whole family moves in one wave and
 only this package's dependency, `ChainRulesCore`, is outside it. Two rows have landed on `main` since
 the wave began — this package's 0.2.4 and `GeometricOptimizers`' 0.6.0 — and the rest are still
-branches, so read the third column before quoting a version as released.
+branches, including this package's 0.2.5, so read the third column before quoting a version as
+released.
 
 | package | version | branch |
 |---|---|---|
-| `NeuralNetworkParameters` | 0.2.4 | this repository, `main` |
+| `NeuralNetworkParameters` | 0.2.5 | this repository, `issue-22-the-eltype-took-values-of-a-branch` (0.2.4 on `main`) |
 | `GeometricBase` | 0.14.9 | `l2norm-over-any-array-and-julia-1.11` |
 | `SimpleSolvers` | 0.13.1 | `retire-the-1.10-getrf-fallback` |
 | `AbstractNeuralNetworks` | 0.7.2 | `adopt-parameterset` |
@@ -213,6 +214,7 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D20 | **The wide-branch tests and the sweep script measure a bare `NamedTuple`, and a consumer holds a `NetworkParameters`.** The two reach `parameterlayout` through different methods and, on Julia 1.11, cost wildly different amounts on the same leaves: 1.35 s bare against 13.40 s wrapped at 369, 2.77 s against 87.77 s at 768. So the 0.2.2 table reports the cheap column, and issue [#16](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16) read the gap between the two as a cost of *nesting* — which it is not: a flat 369-leaf set and a 16 × 24 one cost the same 1.35 s bare and the same 13.8 s wrapped | was `test/wide_branch_tests.jl:27`, `scripts/wide_branch_cost.jl:32` | **fixed** — the sweep runs both shapes at every width, each in its own process, and `test/wide_branch_tests.jl` asserts the round trip and the zero allocations on the wrapped shape. This entry closed on the measurement without a cause, and recorded that no code needed to change on the grounds that the whole path cost nearly the same either way (19.96 s bare, 21.90 s wrapped at 369) so the wrapper only decided which entry point paid. **That was where to look and not what to conclude**: the gap had a cause, D21 is it, and 0.2.3 removed it. The two columns agree now |
 | D21 | **`LeafLayout` carried a `prototype` field that nothing read, and it was the cost D20 measured.** A `LeafLayout` is by construction the terminal case, so `rebuild` on it is the identity and is never called — but the field's type parameter put each leaf's *concrete array type* into the layout type of every branch above it, 1849 nodes in the type tree of a 369-leaf wrapped layout against 742 without. `_layout(::NetworkParameters, ::Int)` is where a caller paid for it, inferring through the child walk's whole return type to wrap its result, and inference on such a type grows faster than the type does: 2.5 times the type was 13 times the time. The bare column never showed it, because only the wrapped shape has such a caller — which is exactly why D20's two-column sweep was needed to find it and D20's own conclusion was not | was `src/layout.jl:29` | **fixed, 0.2.3** — the struct is `LeafLayout{N}` over `range` and `size`. `parameterlayout` on a 369-leaf set inside a `NetworkParameters` goes 13.40 s → 1.05 s and at 768 leaves 87.77 s → 3.01 s, the whole 369-wrapped path 21.90 s → 8.64 s, and Julia 1.11, 1.12 and 1.13 agree at 1.05/1.13/1.03 s where the compat floor used to be the one that behaved differently. `scripts/leaf_layout_cost.jl` is the harness. Issue [#15](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/15) filed it as hygiene and said explicitly it was not the cause: it had compared two leaf *sets* under one layout type, never the layout type with and without the parameter |
 | D22 | **`scripts/wide_branch_cost.jl` did not sweep the fold.** It timed `parameterlayout`, `map(zero, ·)`, `mapparameters`, `flatten` and `unflatten` and the in-place allocations, at both shapes and every width, and not `foldparameters` at either. That was the one walk whose downstream analogue had just produced a two-orders-of-magnitude compile cliff, and the only thing standing in for a figure was the total wall clock of a suite that folds 369 children while asserting the value alone. D16 and D19 are the same lesson about the clock; this is it about an argument | was `scripts/wide_branch_cost.jl` | **fixed, 0.2.4** — three columns, `fold`, `foldzip` and a `tailfold` control that is the `Base.tail` recursion a consumer writes without a zipped fold. Filed as part 2 of issue [#19](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19) |
+| D23 | **`parameter_eltype` took `values` of a branch — D13's defect on the tenth walk, and the one none of D13, D17 or D22's work measured.** It allocated 0 bytes at 32 children and 544 at 33, which is where `Base` stops unrolling a tuple, then 800 at 48 and 6 144 at 369 — D17's two figures exactly. It reached further than the promotion itself: `flatten(ps)` is `flatten(parameter_eltype(ps), ps)`, so the documented spelling for "the parameters' own element type" paid 6 144 B more than `flatten(T, ps)`, and every `NetworkParameters` runs its constructor through the promotion, so *building* a wide set paid it too. **A branch of branches paid it as well, on the shape that does not look worst**: the width of the *outer* branch is what decides it, so a 16 × 24 set of 384 leaves was free while a 48 × 2 one — a child per layer, which is what a network of many layers is — cost 3 168 B and a 369 × 2 one 23 840 B | was `src/leaves.jl:187` | **fixed, 0.2.5** — `_promote_eltypes` takes the branch rather than its `values` and reads it in place at literal indices, the treatment the other nine across-children walks got in 0.2.2 and 0.2.3. Zero at every width, depth and shape, and `flatten(ps)` now costs exactly `flatten(T, ps)`. Found by a consumer (`GeometricOptimizers` [#70](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/70)) rather than here, because `scripts/wide_branch_cost.jl` had no column for the element type — which is **D22's lesson one walk over**, and the column is there now. Issue [#22](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/22) proposed a different fix, settling the element type in the generator's *type* domain, and it was not taken: the runtime chain it blamed allocates nothing (`_promote_eltypes` on an already-built tuple is 0 B at 369) and costs 0.031 s cold against 0.036 s, while settling an `AbstractArray` child with `eltype` would read the interface a leaf presents where the promotion reports the storage it has — a leaf that is an `AbstractMatrix{Float64}` over a `Vector{Float32}` would have flattened into a vector twice as wide. Nothing pinned that; `test/leaves_tests.jl` does now, and the docstring states it as a guarantee |
 
 D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
 at different times. With the structured types upstream of the package that trains with them, a
@@ -313,10 +315,11 @@ Design points worth keeping in view:
 ### Verification
 
 ```bash
-julia --project -e 'using Pkg; Pkg.test()'                                            # 479 tests
+julia --project -e 'using Pkg; Pkg.test()'                                            # 509 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
-julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20/D22
-julia --project=. scripts/leaf_layout_cost.jl                                         # D21
+
+julia --project=. scripts/wide_branch_cost.jl    # D12/D13/D17/D20/D22/D23
+julia --project=. scripts/leaf_layout_cost.jl    # D21
 ```
 
 The sweep prints two shapes at every width, bare and inside a `NetworkParameters`, each in a process of
@@ -334,11 +337,13 @@ holds. A row run alone and the same row inside the sweep have to read the same.
 It also covers a **369-child branch** — the width of GMLDatasets' MNIST transformer, and the shape D12,
 D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at both arities,
 `mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters` and
-`foldstorage` at both arities, the `unflatten` pullback, and the in-place forms at zero allocations,
-and a 48-child one inside a `NetworkParameters` for the same round trip and the same zero
-allocations. It asserts the properties and not the timings, because a wall-clock bound would be a
-flake on a loaded machine; the regression test is that the file *completes*, which before 0.2.2 it
-did not. It costs the suite about 45 s on Julia 1.13 and
+`foldstorage` at both arities, `parameter_eltype` and the `NetworkParameters` constructor that runs it,
+the `unflatten` pullback, and the in-place forms at zero allocations, and a 48-child one inside a
+`NetworkParameters` for the same round trip and the same zero allocations. The element-type assertions
+cover all four shapes — bare, positional and wrapped at both widths, a branch of branches at 48 —
+because D23 was paid on each of them and visible on only some. It asserts the properties and not the
+timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
+the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
 about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
 width a consumer has rather than the width that is convenient.
 

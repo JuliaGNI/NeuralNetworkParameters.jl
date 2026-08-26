@@ -235,6 +235,81 @@ wrapped_set(k) = NetworkParameters(wide_set(k))
     @test counted[] > 0
 end
 
+# The element type of a branch, which every walk in this file reaches through: `flatten(ps)` derives it
+# and every `NetworkParameters` constructor runs it. It is free because the promotion reads the branch
+# in place rather than taking its `values`, and the width is what makes that worth asserting — `Base`
+# unrolls a tuple to 32 fields and drops to its `Any32` fallback past it, so a promotion over `values`
+# is free at 32 children, 800 bytes at 48 and 6 144 at 369.
+#
+# **A branch of branches is asserted separately, and the shape that shows the difference is not the one
+# that looks worst.** What decides it is the width of the *outer* branch, so a 16 × 24 set of 384 leaves
+# is free either way while a 48 × 2 one — a child per layer, which is the shape a network of many layers
+# has — is 3 168 bytes over `values` and a 369 × 2 one 23 840. `nested_set` is that shape, which is why
+# the nesting is asserted here rather than taken from the flat case.
+#
+# The wrapped shape reads zero whatever the promotion does, because
+# `parameter_eltype(::NetworkParameters{T})` is `T` off the type. Its *constructor* is where the bare
+# figure is paid, which is what the `NetworkParameters` line below asserts.
+_eltype_allocs(ps) = @allocated parameter_eltype(ps)
+_construct_allocs(nt) = @allocated NetworkParameters(nt)
+_flatten_allocs_out(ps) = @allocated flatten(ps)
+_flatten_typed_allocs(ps) = @allocated flatten(Float32, ps)
+_rrule_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, ps)
+_rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
+
+@testset "the element type of a branch of $k children costs nothing" for k in WIDTHS
+    ps = wide_set(k)
+    tup = values(ps)
+    wrapped = NetworkParameters(ps)
+
+    for x in (ps, tup, wrapped)
+        _eltype_allocs(x)                     # warm up the call and the measurement
+        @test _eltype_allocs(x) == 0
+    end
+
+    # and the answer is still a constant the compiler has: inference was never what allocated, so a
+    # fix that lost it would be a different regression. `<:` for the reason `leaves_tests.jl` gives
+    @test only(Base.return_types(parameter_eltype, Tuple{typeof(ps)})) <: Type{Float32}
+    @test parameter_eltype(ps) === Float32
+    @test parameter_eltype(tup) === Float32
+    @test parameter_eltype(wrapped) === Float32
+
+    # the constructor, which is the path a consumer holding a wrapped set actually pays
+    _construct_allocs(ps)
+    @test _construct_allocs(ps) == 0
+
+    # and the claim the `flatten` docstring makes: `flatten(ps)` is `flatten(parameter_eltype(ps), ps)`,
+    # so naming the element type at the call must not be the cheaper spelling. The reverse pass makes
+    # the same claim, deriving the element type the same way (`src/derivatives.jl:35`), so a gradient
+    # through the flat form of a wide set is covered too.
+    #
+    # A **bound** and not an equality, and the reason is `@allocated` rather than these walks:
+    # it reports the process-wide counter over the window, not the call's own, so anything else running
+    # lands in it. Two readings of two multi-kilobyte calls therefore differ by a few bytes on a loaded
+    # machine — CI has read 6 039 against 6 055 for this pair, which are not even multiples of eight.
+    # `8k` separates that from what is being guarded with room either way: a promotion over `values`
+    # costs about 16 bytes a child, so the gap it opens is twice this bound at both widths, while the
+    # jitter is two orders of magnitude below it. The promotion itself is asserted at exactly zero
+    # above, which is the guarantee; these two are its consequence for a caller.
+    _flatten_allocs_out(ps); _flatten_typed_allocs(ps)
+    _rrule_allocs(ps); _rrule_typed_allocs(ps)
+    @test _flatten_allocs_out(ps) - _flatten_typed_allocs(ps) < 8k
+    @test _rrule_allocs(ps) - _rrule_typed_allocs(ps) < 8k
+end
+
+# 48 and not 369, for the reason the round-trip testset above gives. What the nesting adds is asserted
+# all the same, because it is the width of the *outer* branch that decided the cost — so this shape
+# allocated where a 16 × 24 set of more leaves did not.
+@testset "a wide branch of branches costs nothing either at $k children" for k in (48,)
+    ps = nested_set(k)
+    _eltype_allocs(ps)
+    @test _eltype_allocs(ps) == 0
+    @test parameter_eltype(ps) === Float32
+
+    _construct_allocs(ps)
+    @test _construct_allocs(ps) == 0
+end
+
 @testset "a wide branch is a ParameterSet and a parameter tree" begin
     ps = wide_set(369)
     @test ps isa ParameterSet
