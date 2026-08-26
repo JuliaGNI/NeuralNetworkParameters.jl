@@ -55,6 +55,17 @@
 # cost about half a minute each on Julia 1.12 and 1.13 and the whole sweep runs in minutes. It is worth
 # it, because without it the two fold columns are numbers with nothing to be read against.
 #
+# **`parameter_eltype` is in the allocations column for the reason the fold has timed ones.** It is what
+# `flatten(ps)` derives its element type from and what every `NetworkParameters` constructor runs, so
+# every walk swept here reaches it — and it is a `values(·)` on a branch away from costing D13 and D17's
+# figures: 800 bytes at 48 children, 6 144 at 369, and 23 840 on a 369 × 2 branch of branches. A column
+# that is not swept is a column whose behaviour is not known, which is what left this one to be measured
+# by a consumer instead (issue #22). D22 is the same point one walk over.
+#
+# Read the **bare** column. The wrapped one is 0 by construction, since
+# `parameter_eltype(::NetworkParameters{T})` is `T` off the type — but its *constructor* promotes over
+# the bare branch, so what the bare column reports is what building the wrapped set costs.
+#
 # Both shapes are still swept, for two reasons: a consumer holds a `NetworkParameters`, so a sweep of
 # bare sets alone would report a shape nobody has, and two columns that agree are how the asymmetry
 # coming back would be noticed.
@@ -101,6 +112,7 @@ end
 # an optimizer's inner loop rather than the top level of a script.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
+_eltype_allocs(ps) = @allocated parameter_eltype(ps)
 
 # `mapparameters!` needs a **zero-argument** closure and not the two above. `@allocated f(a, b)` lowers
 # to `Base.allocated(f, a, b)`, and `mapparameters!` is a `Vararg` method — so the splat inside
@@ -141,7 +153,7 @@ const WIDTHS = (16, 32, 48, 64, 128, 369)
 header() = println(rpad("shape", 10), rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
                    rpad("mapparams", 11), rpad("fold", 8), rpad("foldzip", 9), rpad("flatten", 9),
                    rpad("unflatten", 11), rpad("tailfold", 10),
-                   "allocs flatten!/unflatten!/mapparameters!")
+                   "allocs eltype/flatten!/unflatten!/mapparameters!")
 
 # One width in one shape, in a process that has compiled nothing for either. Within the row the order
 # still matters — `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters`
@@ -167,13 +179,15 @@ function sweep_one(shape::Symbol, k)
     dest = unflatten(layout, zero(v))
     _flatten_allocs(buf, ps, layout)          # warm the call and the measurement
     _unflatten_allocs(dest, layout, v)
+    _eltype_allocs(ps)
+    a_eltype = _eltype_allocs(ps)
     a_flat = _flatten_allocs(buf, ps, layout)
     a_unflat = _unflatten_allocs(dest, layout, v)
     a_mapp = _thunk_allocs(() -> mapparameters!(_touch!, dest, ps))
 
     println(rpad(shape, 10), rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
             rpad(t_fold, 8), rpad(t_foldzip, 9), rpad(t_flat, 9), rpad(t_unflat, 11),
-            rpad(t_tail, 10), a_flat, "/", a_unflat, "/", a_mapp)
+            rpad(t_tail, 10), a_eltype, "/", a_flat, "/", a_unflat, "/", a_mapp)
     flush(stdout)
 end
 

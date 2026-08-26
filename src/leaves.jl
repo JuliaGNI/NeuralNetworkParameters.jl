@@ -180,11 +180,21 @@ parameter type in the ecosystem — and a leaf that keeps its numbers behind ano
 with one method more, described under [`freeparameters`](@ref). Asking an arbitrary type where its
 storage is would mean raising, which this function must not do.
 
+It follows it at the level of *values*, `freeparameters(x) === x`, and that is a guarantee rather than
+an implementation detail. A structured leaf reports the element type of its **storage**, which need not
+be the `eltype` of the interface it presents: a leaf that is an `AbstractMatrix{Float64}` over a
+`Vector{Float32}` flattens into a `Vector{Float32}`, because that is what its numbers are. Deciding
+the promotion from the leaf's *type* instead would read the interface and be wrong about such a leaf,
+which is why it is not decided there — and there is no cost to buy with it.
+
 For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
-nothing is recomputed and the call folds to a constant.
+nothing is recomputed and the call folds to a constant. A bare `NamedTuple` or `Tuple` is read in
+place at literal indices, one `@generated` body per branch shape, for the reason the head of
+`walk.jl` gives — so it too costs nothing at any width, depth or shape, and `flatten(ps)` costs
+exactly what `flatten(T, ps)` costs.
 """
 @inline parameter_eltype(::NetworkParameters{T}) where {T} = T
-@inline parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(values(ps))
+@inline parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(ps)
 @inline parameter_eltype(x::Number) = typeof(x)
 
 @inline function parameter_eltype(x::AbstractArray)
@@ -203,7 +213,14 @@ end
 
 # Written out rather than recursed for the reason the head of `walk.jl` gives: a `Base.tail` chain
 # costs one specialisation per child, and this one is on `flatten`'s path.
-@generated function _promote_eltypes(xs::Tuple)
+#
+# It takes the *branch* and not its `values`, which is the other half of that treatment. `values` of a
+# branch materialises a temporary tuple, which is free while the branch stays in registers and is not
+# beyond that: `Base` unrolls a tuple up to 32 fields and drops to its `Any32` fallback past it, so a
+# promotion taken over `values` costs nothing at 32 children and 6 144 bytes at 369, and 23 840 on a
+# 369 × 2 branch of branches. `getfield` at a literal index reads a `NamedTuple` and a `Tuple` alike,
+# as `_flatten_children!` does for the same reason.
+@generated function _promote_eltypes(xs::Union{NamedTuple, Tuple})
     fieldcount(xs) == 0 && return :(Union{})
     expr = :(parameter_eltype(getfield(xs, 1)))
     for i in 2:fieldcount(xs)

@@ -4,6 +4,77 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] — 2026-08-26
+
+### Fixed
+
+- **`parameter_eltype` took `values` of a branch, so it allocated on a wide one — and every walk here
+  reaches it.** `flatten(ps)` is `flatten(parameter_eltype(ps), ps)`, which is the documented spelling
+  for "the parameters' own element type", so the convenient form was the one that paid; and every
+  `NetworkParameters` runs its constructor through the promotion, so *building* a wide set paid it too.
+  The promotion now reads the branch in place with `getfield` at literal indices, as the other nine
+  across-children walks have since 0.2.2. Issue [#22], found in
+  `GeometricOptimizers` [#70](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/70), where
+  0.2.4's zipped `foldparameters` put `parameter_eltype` on a hot path for the first time.
+
+  `@allocated` from inside a function with the call warmed, `Float32` 2×2 leaves, Julia 1.13.0-rc3 on
+  an Apple M4 Max:
+
+  | branch | before | after |
+  |---|---|---|
+  | 32 children | 0 B | 0 B |
+  | 33 children | 544 B | **0 B** |
+  | 48 children | 800 B | **0 B** |
+  | 369 children | 6 144 B | **0 B** |
+  | `NetworkParameters` of the 369 | 6 144 B | **0 B** |
+  | `flatten(ps)` / `flatten(T, ps)`, 369 | 12 352 B / 6 208 B | **6 208 B / 6 208 B** |
+  | `rrule(flatten, ps)` / `rrule(flatten, T, ps)`, 369 | 12 352 B / 6 208 B | **6 208 B / 6 208 B** |
+
+  The reverse pass paid it on the same terms, because `rrule(flatten, ps)` derives the element type the
+  same way — so a gradient taken through the flat form of a wide bare set carried the 6 144 B as well.
+
+  **A branch of branches paid it as well, and the shape that shows it is not the one that looks worst.**
+  What decides the cost is the width of the *outer* branch, because `Base` unrolls a tuple up to 32
+  fields and drops to its `Any32` fallback past it. So a 16 × 24 set was already free while a 48 × 2
+  one — a child per layer, which is the shape a network of many layers has — cost 3 168 B and a
+  369 × 2 one 23 840 B. All are 0 B now.
+
+  These are D13 and D17's figures exactly, and this is their defect: `values(·)` on a branch
+  materialises a temporary tuple, which is free while the branch stays in registers and is not beyond
+  that. 0.2.2 removed it from the two forward walks and 0.2.3 from the three that take a second set.
+  This was the tenth, and it was the one none of that work measured — `scripts/wide_branch_cost.jl` had
+  no column for the element type until now, which is why the figure came from a consumer rather than
+  from here.
+
+  **The issue proposed a different fix, and it was not taken.** It read the cost as the runtime
+  `promote_type` chain the `@generated` body emits and proposed settling the element type in the type
+  domain instead. Measured, that chain is not the cost — `_promote_eltypes` handed a tuple *already
+  built* allocates 0 B at 369 children — and it is not a compile cost either: `parameter_eltype` on a
+  369-child branch takes 0.031 s cold with the fix against 0.036 s without. The shortcut would also
+  have changed an answer. Settling an `AbstractArray` child with `eltype` reads the interface a leaf
+  *presents*, where `parameter_eltype` follows `freeparameters` behind a `s === x` test and reports the
+  storage a leaf *has*; a leaf that is an `AbstractMatrix{Float64}` over a `Vector{Float32}` flattens
+  into a `Vector{Float32}` and would have flattened into a vector twice as wide. Nothing pinned that
+  case, as the issue noted; `test/leaves_tests.jl` pins it now, and the docstring states it as a
+  guarantee rather than leaving it to be read off the implementation.
+
+  What the fix buys downstream is the argument the issue makes for it. With the call free,
+  `GeometricOptimizers`' `_dot` is one widened signature rather than two — one taking the element type
+  off a `ParameterContainer{T}` to keep the wide flat shape free and one using `parameter_eltype` for
+  the nested shapes that bind no `T` — and `zero(parameter_eltype(x))` becomes usable in the folds
+  behind `l2norm` and `solution_scale`, which is the order-dependence in their accumulator that they
+  currently document instead.
+
+- **`test/wide_branch_tests.jl` asserts the element type at both widths**, in all four shapes — bare,
+  positional, wrapped and a branch of branches — together with the constructor and the equality of
+  `flatten(ps)` with `flatten(T, ps)`, which is the claim a consumer reads. Inference is asserted too:
+  it was never what allocated, and a fix that lost the constant would be a different regression.
+
+- **`scripts/wide_branch_cost.jl` sweeps the element type**, in the allocations column. Read the bare
+  column: the wrapped one is 0 by construction, since `parameter_eltype(::NetworkParameters{T})` is `T`
+  off the type, but its constructor promotes over the bare branch — so the bare figure is what building
+  the wrapped set costs. D22 is the same lesson one walk over.
+
 ## [0.2.4] — 2026-08-26
 
 **The fold takes several sets in lockstep, as every other walk here already did.**
@@ -662,6 +733,8 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 [#16]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16
 [#18]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/18
 [#19]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19
+[#22]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/22
+[0.2.5]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.5
 [0.2.4]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.4
 [0.2.3]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.3
 [0.2.2]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.2
