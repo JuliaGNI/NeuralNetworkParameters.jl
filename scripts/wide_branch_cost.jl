@@ -1,4 +1,4 @@
-# What the walks cost as a function of the *width* of one branch.
+# What the walks cost as a function of the *width* of one branch, and of the *shape* it is held in.
 #
 # Run with the repository as the active project:
 #
@@ -23,6 +23,26 @@
 # default run is getting wrong. `GeometricOptimizers` quoted the default one — `mapparameters` at
 # "0.00 s" on a 369-entry branch, against 1.51 s measured cold — and closed an issue on it. A table is
 # cold here or it is not printed.
+#
+# **Every width is swept in both shapes: a bare `NamedTuple` and the same set inside a
+# `NetworkParameters`.** That is the same methodology applied to the argument rather than to the clock,
+# and it is worth as much. `parameterlayout` reaches a bare branch through one `@generated` body and a
+# wrapped one through `_layout(::NetworkParameters, ::Int)` first, and on Julia 1.11 those two cost
+# wildly different amounts on the same leaves: 1.37 s bare against 13.44 s wrapped at 369 children,
+# 2.73 s against 88.69 s at 768. The *whole* path costs the same either way — 21.66 s bare against
+# 22.41 s wrapped at 369, summed over `parameterlayout`, `flatten` and `unflatten` — so what the
+# wrapper changes is which entry point pays, not the total. Julia 1.12 and 1.13 do not distinguish the
+# two at all (1.78 s and 1.67 s wrapped at 369).
+#
+# A consumer holds a `NetworkParameters`, so a sweep of bare sets alone reports the cheap column and
+# calls it the cost. It reported exactly that until this shape was added, and issue #16 read the
+# difference between the two columns as a cost of *nesting*, which it is not — a flat 369-leaf set and
+# a 16 × 24 one cost the same 13.8 s wrapped and the same 1.35 s bare.
+#
+# The two shapes run in separate processes for the reason the widths do. They are different methods but
+# they share the inner `_layout(::NamedTuple, ::Int)` specialisation, so a bare row run first leaves the
+# wrapped row less to compile. On Julia 1.11 the wrapped 369 row takes about 25 s on its own account;
+# on 1.13 it takes about 5 s.
 
 using NeuralNetworkParameters
 
@@ -32,6 +52,12 @@ const T = Float32
 # in it, and a 2×2 keeps the run time next to nothing beside the compilation.
 wide_set(k::Integer) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
     Tuple(fill(T(i), 2, 2) for i in 1:k))
+
+# The shape a consumer actually holds. The leaves are the same; what differs is the method
+# `parameterlayout` enters through.
+wrapped_set(k::Integer) = NetworkParameters(wide_set(k))
+
+const SHAPES = (:bare => wide_set, :wrapped => wrapped_set)
 
 # `time()` and not `@elapsed`: the point is the very first call, and `@elapsed` in a loop reports the
 # second.
@@ -68,22 +94,29 @@ _thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
 # walks began indexing them in place.
 _touch!(d, s) = (@inbounds d[begin] = s[begin]; nothing)
 
+# `map(zero, ·)` is the floor the other columns are read against, and it is `Base`'s function rather than
+# one of this package's — so it is measured on the `NamedTuple` in both shapes, and the wrapped column
+# reports the same figure as the bare one by construction.
+_leaves(ps::NetworkParameters) = params(ps)
+_leaves(ps) = ps
+
 # 32 is where `Base` stops unrolling a tuple; 369 is the parameter set of the MNIST transformer in
 # `scripts/geometric_optimizers/mnist.jl` of GMLDatasets.jl, which is the width that made the defect
 # worth fixing rather than noting.
 const WIDTHS = (16, 32, 48, 64, 128, 369)
 
-header() = println(rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
+header() = println(rpad("shape", 10), rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
                    rpad("mapparams", 11), rpad("flatten", 9), rpad("unflatten", 11),
                    "allocs flatten!/unflatten!/mapparameters!")
 
-# One width, in a process that has compiled nothing for it. Within the row the order still matters —
-# `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters` would absorb the
-# rest — so the rows are ordered cheapest-first and `flatten` comes after both.
-function sweep_one(k)
-    ps = wide_set(k)
+# One width in one shape, in a process that has compiled nothing for either. Within the row the order
+# still matters — `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters`
+# would absorb the rest — so the rows are ordered cheapest-first and `flatten` comes after both.
+function sweep_one(shape::Symbol, k)
+    build = last(SHAPES[findfirst(s -> first(s) === shape, SHAPES)])
+    ps = build(k)
     t_layout = first_call(parameterlayout, ps)
-    t_map = first_call(x -> map(zero, x), ps)
+    t_map = first_call(x -> map(zero, x), _leaves(ps))
     t_mapp = first_call(x -> mapparameters(zero, x), ps)
     t_flat = first_call(flatten, ps)
 
@@ -98,18 +131,24 @@ function sweep_one(k)
     a_unflat = _unflatten_allocs(dest, layout, v)
     a_mapp = _thunk_allocs(() -> mapparameters!(_touch!, dest, ps))
 
-    println(rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
+    println(rpad(shape, 10), rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
             rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat, "/", a_mapp)
     flush(stdout)
 end
 
-# `--in-process k` is what the child processes are invoked with, and is not for interactive use.
+# `--in-process shape k` is what the child processes are invoked with, and is not for interactive use.
 function fan_out()
     header()
-    for k in WIDTHS
+    flush(stdout)
+    for (shape, _) in SHAPES, k in WIDTHS
         run(pipeline(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project())
-                      $(@__FILE__) --in-process $k`))
+                      $(@__FILE__) --in-process $shape $k`))
     end
 end
 
-"--in-process" in ARGS ? sweep_one(parse(Int, ARGS[findfirst(==("--in-process"), ARGS) + 1])) : fan_out()
+if "--in-process" in ARGS
+    i = findfirst(==("--in-process"), ARGS)
+    sweep_one(Symbol(ARGS[i + 1]), parse(Int, ARGS[i + 2]))
+else
+    fan_out()
+end

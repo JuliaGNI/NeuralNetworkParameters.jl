@@ -151,14 +151,22 @@ checkouts, so §8 is now written as *where each package stands* rather than as a
 ## 4. Defects on record
 
 D1, D2, D3, D4, D7, D8, D9, D10, D11, D12, D13 and D14 are fixed — which is all of them but D5 and
-D6, and those two are open *in `GeometricOptimizers`* rather than here. D15 through D19 are new in this
-revision and are all five defects of this package's own 0.2.2 work, found by running it rather than by
+D6, and those two are open *in `GeometricOptimizers`* rather than here. D15 through D20 are new in this
+revision and are all six defects of this package's own 0.2.2 work, found by running it rather than by
 reading it.
 
 **D17 and D18 came from reviewing 0.2.2 itself**, and the lesson is narrower than D16's and worth as
 much: D13 was fixed on the two walks the tests measured, and the three that take a second set were
 neither fixed nor measured — while being the walks that run every iteration rather than once. A
 guarantee holds where it is asserted and nowhere else.
+
+**D16, D19 and D20 are one lesson from three sides: a harness reports what it is pointed at.** D16
+swept its widths in one process, so every row but the first measured what its predecessors had
+compiled. D19 timed a direct call, so the inference being timed was spent before the clock started.
+D20 is the argument rather than the clock — every set the sweep and the wide-branch tests build is a
+bare `NamedTuple`, and a consumer holds a `NetworkParameters`. On Julia 1.11 that is 1.37 s against
+13.44 s for `parameterlayout` on the same 369 leaves, so the committed table reports the cheap column
+and calls it the cost.
 
 **Three entries in this table were stale when this revision began**, and all three in the same
 direction: D3, the `changebackend` half of D8, and D11 were recorded as open and had been fixed in
@@ -194,6 +202,7 @@ has, and `scripts/wide_branch_cost.jl` is the harness.
 | D17 | **D13 was fixed on the two walks that were measured and not on the three that were not.** `mapparameters!`, `mapstorage!` and `foreachparameters` turned each *further* argument into a `values(...)` tuple per branch, and a skipped one into a fresh tuple of `nothing`s — 800 bytes a call on a flat 48-child set, 6 144 at 369, and three to four times that on a branch of branches. These are the walks an optimizer runs every iteration, where `flatten!` runs once or twice | was `src/walk.jl:152,196,293-297` | **fixed** — `_foreach_zip` reads every argument with `getfield` at a literal index; `_values_for` and `_tuple_for` are gone. Zero at every width, depth and arity. Not caught because measuring a `Vararg` method needs a zero-argument closure: `@allocated f(a, b)` lowers to `Base.allocated(f, a, b)`, whose own splat allocates |
 | D18 | **The in-place walks paired the children of two keyed branches by *position*.** `_values_for(x, ks)` ignored its `ks`, so two same-shaped sets whose keys were ordered differently wrote every leaf into the wrong parameter without a word, where `mapparameters` has always raised | was `src/walk.jl:293` | **fixed** — the generated body checks a named argument's keys against the branch's own, in the generator, so the guard is free at run time and stricter than `_check_keys`. A behaviour change: positional pairing of differently-keyed sets now raises |
 | D19 | **`scripts/wide_branch_cost.jl` still was not measuring compile time after D16.** `first_call` timed a direct `f(args...)`, and compiling `first_call` infers through that call — so the inference being timed was spent before its own `t = time()` ran. On Julia 1.13 the committed harness printed 0.00 s for every width in every column, where an opaque call measures 1.61 s for `parameterlayout` and 3.95 s for `flatten` at 369 children | was `scripts/wide_branch_cost.jl:38-42` | **fixed** — the call goes through `Base.invokelatest`. D16 and this are the same lesson from two ends: arrange the harness so the cost cannot have been paid somewhere the clock is not looking |
+| D20 | **The wide-branch tests and the sweep script measure a bare `NamedTuple`, and a consumer holds a `NetworkParameters`.** The two reach `parameterlayout` through different methods and, on Julia 1.11, cost wildly different amounts on the same leaves: 1.37 s bare against 13.44 s wrapped at 369, 2.73 s against 88.69 s at 768. So the 0.2.2 table reports the cheap column, and issue [#16](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16) read the gap between the two as a cost of *nesting* — which it is not: a flat 369-leaf set and a 16 × 24 one cost the same 1.35 s bare and the same 13.8 s wrapped | was `test/wide_branch_tests.jl:27`, `scripts/wide_branch_cost.jl:32` | **fixed** — the sweep runs both shapes at every width, each in its own process, and `test/wide_branch_tests.jl` asserts the round trip and the zero allocations on the wrapped shape. No code changed: the whole path costs the same either way (21.66 s bare, 22.41 s wrapped at 369), the wrapper only decides which entry point pays, and Julia 1.12 and 1.13 do not distinguish the two at all. `src/layout.jl` records why fusing `_layout(::NetworkParameters, ::Int)` moves the cost rather than removing it |
 
 D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
 at different times. With the structured types upstream of the package that trains with them, a
@@ -296,13 +305,20 @@ Design points worth keeping in view:
 ```bash
 julia --project -e 'using Pkg; Pkg.test()'                                            # 424 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
-julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17
+julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20
 ```
+
+The sweep prints two shapes at every width, bare and inside a `NetworkParameters`, each in a process of
+its own (D20). On Julia 1.11 the wrapped `layout` column has to show the cliff the bare one does not —
+about 2.2 s at 128 children and about 13.4 s at 369, against 0.66 s and 1.37 s bare. If the two columns
+agree there, the fork is warming one shape from the other and they are not in separate processes. On
+1.13 they agree because the compiler does not distinguish them.
 
 It also covers a **369-child branch** — the width of GMLDatasets' MNIST transformer, and the shape D12,
 D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at both arities,
 `mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters`, the
-`unflatten` pullback, and the in-place forms at zero allocations. It asserts the properties and not the
+`unflatten` pullback, and the in-place forms at zero allocations, and a 48-child one inside a
+`NetworkParameters` for the same round trip and the same zero allocations. It asserts the properties and not the
 timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
 the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
 about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
