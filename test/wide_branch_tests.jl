@@ -279,15 +279,22 @@ _rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
     @test _construct_allocs(ps) == 0
 
     # and the claim the `flatten` docstring makes: `flatten(ps)` is `flatten(parameter_eltype(ps), ps)`,
-    # so naming the element type at the call must not be the cheaper spelling. Asserted as an equality
-    # rather than a figure, since both allocate the flat vector and the layout
+    # so naming the element type at the call must not be the cheaper spelling. The reverse pass makes
+    # the same claim, deriving the element type the same way (`src/derivatives.jl:35`), so a gradient
+    # through the flat form of a wide set is covered too.
+    #
+    # A **bound** and not an equality, and the reason is `@allocated` rather than these walks:
+    # it reports the process-wide counter over the window, not the call's own, so anything else running
+    # lands in it. Two readings of two multi-kilobyte calls therefore differ by a few bytes on a loaded
+    # machine — CI has read 6 039 against 6 055 for this pair, which are not even multiples of eight.
+    # `8k` separates that from what is being guarded with room either way: a promotion over `values`
+    # costs about 16 bytes a child, so the gap it opens is twice this bound at both widths, while the
+    # jitter is two orders of magnitude below it. The promotion itself is asserted at exactly zero
+    # above, which is the guarantee; these two are its consequence for a caller.
     _flatten_allocs_out(ps); _flatten_typed_allocs(ps)
-    @test _flatten_allocs_out(ps) == _flatten_typed_allocs(ps)
-
-    # and the reverse pass, which derives the element type the same way (`src/derivatives.jl:35`), so
-    # a gradient through the flat form of a wide set carried the same bytes
     _rrule_allocs(ps); _rrule_typed_allocs(ps)
-    @test _rrule_allocs(ps) == _rrule_typed_allocs(ps)
+    @test _flatten_allocs_out(ps) - _flatten_typed_allocs(ps) < 8k
+    @test _rrule_allocs(ps) - _rrule_typed_allocs(ps) < 8k
 end
 
 # 48 × 2, for the reason the comment above gives: it is the width of the outer branch that decided the
