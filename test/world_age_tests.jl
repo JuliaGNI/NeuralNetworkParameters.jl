@@ -14,11 +14,11 @@
 # and a subprocess is the only way to ask for it.
 #
 # Cheap enough to keep: the package's dependency is `ChainRulesCore`, so a from-source load is about a
-# second. The walks exercised below are the four whose generators call `_children_arity`
-# (`_map_zip`, `_foreach_zip` and, through `flatten`, `_flatten_children!` and `_unflatten_children!`)
-# plus `_fold_children`, whose generator calls only `Base`. `_foreach_zip` is run at **two** arities,
-# because the key and index helpers a further set needs are only reached at the second — one set has no
-# second set to pair against, so an arity-one walk would leave exactly that chain of helpers untried.
+# second. The walks exercised below are the five whose generators call `_children_arity` — `_map_zip`,
+# `_foreach_zip`, `_fold_zip` and, through `flatten`, `_flatten_children!` and `_unflatten_children!`.
+# `_foreach_zip` and `_fold_zip` are run at **two** arities, because the key and index helpers a
+# further set needs are only reached at the second — one set has no second set to pair against, so an
+# arity-one walk would leave exactly that chain of helpers untried.
 
 using Test
 
@@ -59,8 +59,11 @@ let qs = mapparameters(zero, ps)
     qs == ps || exit(6)
 end
 
-# `_fold_children`
+# `_fold_zip` at arity one, and at the arity that reaches `_branch_keys` and `_child_expr` from the
+# fold's own generator; `foldstorage` is its other `_fold_step`
 foldparameters((a, x) -> a + length(x), 0, ps) == 4 || exit(7)
+foldparameters((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(10)
+foldstorage((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(11)
 
 exit(0)
 """

@@ -39,7 +39,7 @@ export freeparameters, rebuild, parameter_metadata, parameter_eltype
 include("leaves.jl")
 
 export mapparameters, mapparameters!, mapstorage, mapstorage!, foreachparameters,
-       foldparameters
+       foldparameters, foldstorage
 
 include("walk.jl")
 

@@ -26,11 +26,10 @@
 # So the across-children walks write the flat body out instead: one `@generated` expansion per branch
 # shape, `k` statements reading `getfield(xs, 1) … getfield(xs, k)` at *literal* indices. One
 # specialisation instead of `k`, no new tuple types at all, every index inferred at a constant, and
-# the same straight-line code the chain used to inline down to. They are `_foreach_zip`,
-# `_fold_children` and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and
-# `_unflatten_children!` in `flatten.jl`, the two branch cases of `_layout` in `layout.jl`,
-# `_promote_eltypes` in
-# `leaves.jl`, and `_accumulate_named!` and `_matching_named` on the reverse pass in `derivatives.jl`.
+# the same straight-line code the chain used to inline down to. They are `_foreach_zip`, `_fold_zip`
+# and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and `_unflatten_children!` in
+# `flatten.jl`, the two branch cases of `_layout` in `layout.jl`, `_promote_eltypes` in `leaves.jl`,
+# and `_accumulate_named!` and `_matching_named` on the reverse pass in `derivatives.jl`.
 #
 # A walk that takes *several* sets in lockstep indexes each of them in place too, and that is the same
 # point made about the second argument. Taking `values` of a branch to zip it materialises a temporary
@@ -238,10 +237,31 @@ _storage_recurse(args...) = nothing
 
 """
     foldparameters(op, init, ps)
+    foldparameters(op, init, ps, rest...)
 
 Left-fold `op` over the leaves of `ps`, starting from `init`.
 
-The leaves are visited in the order `flatten` writes them, so a fold and a flattening agree.
+With further arguments the trees are walked in lockstep and `op` receives one leaf from each —
+`op(acc, a_leaf, b_leaf, …)` — which is how an inner product or a quadrature norm over a parameter
+set is taken without flattening it first. The children of a keyed branch are paired **by key** and the
+keys have to agree, exactly as for [`mapparameters`](@ref); a `Tuple` branch is paired positionally,
+since the blocks of a multi-block leaf have no keys to agree on.
+
+The leaves are visited in the order [`flatten`](@ref) writes them, so a fold and a flattening agree.
+
+`op` sees *whole* leaves — a `SymmetricMatrix` arrives as a `SymmetricMatrix`. Use [`foldstorage`](@ref)
+to fold over the differentiable storage instead.
+
+Where [`foreachparameters`](@ref) skips a set that is `nothing`, a fold raises: it reduces every leaf
+it is given, so a set left out would make the result a partial sum without saying so.
+
+Allocation-free at any width, depth and arity — **provided a caller that hands `op` on through a
+function of its own annotates it `::F where {F}` there.** Julia does not specialise on a function
+argument it never sees called, so without that annotation `op` arrives boxed and every leaf costs a
+dynamic dispatch: 3 088 bytes a call on a 369-leaf set at arity one and 6 160 at arity two, against
+zero with it, identically on Julia 1.11.9 and 1.13.0-rc3. A closure that *captures* a function needs
+nothing, a closure being its own type, which is why `(acc, x) -> acc + abs2(f(x))` is the way to fold
+a function of each leaf and no second function argument is needed here.
 
 # Examples
 
@@ -255,21 +275,65 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 
 4
 ```
+
+Two sets in lockstep, which is ``\\sum_i a_ib_i`` without a flat vector of either:
+
+```jldoctest
+using NeuralNetworkParameters
+
+a = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]),))
+b = NetworkParameters((L1 = (W = [4.0 5.0], b = [6.0]),))
+foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
+
+# output
+
+32.0
+```
 """
-@inline foldparameters(op, init, ps::NetworkParameters) = foldparameters(op, init, params(ps))
+@inline foldparameters(op, init, ps::Union{NetworkParameters, NamedTuple},
+    rest::Vararg{Any, N}) where {N} = _fold_zip(
+    op, freeparameters, init, _as_namedtuple(ps), map(_as_namedtuple, rest)...)
 
-@inline foldparameters(op, init, ps::Union{NamedTuple, Tuple}) = _fold_children(op, init, ps)
+@inline foldparameters(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N} = _fold_zip(
+    op, freeparameters, init, ps, map(_as_tuple, rest)...)
 
-@inline foldparameters(op, init, x) = op(init, x)
+@inline foldparameters(op, init, x, rest::Vararg{Any, N}) where {N} = op(init, x, rest...)
 
-# A *left* fold, and the expansion keeps it one: `op` is the caller's and need not be associative,
-# so the nesting below is built inside out rather than halved.
-@generated function _fold_children(op, acc, xs)
-    expr = :acc
-    for i in 1:fieldcount(xs)
-        expr = :(foldparameters(op, $expr, getfield(xs, $i)))
-    end
-    expr
+"""
+    foldstorage(op, init, ps, rest...)
+
+Like [`foldparameters`](@ref), but `op` is handed the [`freeparameters`](@ref) of each leaf.
+
+This is the level at which a reduction over a structured parameter is meaningful, and it is the level
+[`flatten`](@ref) writes. The pairing of a `SymmetricMatrix` is over the ``n(n+1)/2`` numbers it
+stores; reading its dense ``n \\times n`` interface instead would count every off-diagonal entry
+twice, and for a skew-symmetric or triangular matrix there is no dense reading to be had at all.
+
+# Examples
+
+```jldoctest
+using NeuralNetworkParameters
+
+a = NetworkParameters((L1 = (b = [1.0, 2.0],),))
+b = NetworkParameters((L1 = (b = [3.0, 4.0],),))
+foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
+
+# output
+
+11.0
+```
+"""
+@inline foldstorage(op, init, ps::Union{NetworkParameters, NamedTuple},
+    rest::Vararg{Any, N}) where {N} = _fold_zip(
+    op, _storage_recurse, init, _as_namedtuple(ps), map(_as_namedtuple, rest)...)
+
+@inline foldstorage(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N} = _fold_zip(
+    op, _storage_recurse, init, ps, map(_as_tuple, rest)...)
+
+@inline function foldstorage(op, init, x, rest::Vararg{Any, N}) where {N}
+    s = freeparameters(x)
+    s === x && return op(init, x, rest...)
+    foldstorage(op, init, s, map(freeparameters, rest)...)
 end
 
 # ---------------------------------------------------------------------------------------------------
@@ -290,8 +354,9 @@ end
 # are covered by `walk.jl` being included first.
 #
 # The same holds for everything else a generator here reaches: `_check_arity`, `_arity_error`,
-# `_branch_keys`, `_child_keys_error` and `_child_expr` below. All of them sit above `_foreach_zip`,
-# which is the only generated body that calls them, and none may be moved past it.
+# `_branch_keys`, `_child_keys_error` and `_child_expr` below, and `_no_folded_skip_error` further
+# down. All of them sit above `_foreach_zip` and `_fold_zip`, which are the generated bodies that call
+# them, and none may be moved past either.
 #
 # `rest` is the *types* of the further sets, as a tuple, and the recursion below is over that tuple —
 # whose length is the arity of the walk, one or two, never the width of a branch. A `Nothing` among them
@@ -428,6 +493,53 @@ end
     Any, N}) where {N} = foreachparameters(f, args...)
 @inline _foreach_step(f, ::typeof(_storage_recurse), args::Vararg{
     Any, N}) where {N} = _foreach_storage(f, args...)
+
+# The fold across the children of one branch, at every arity. `foldparameters` and `foldstorage` are
+# the same walk over the same generated body, and `kind` selects which of the two `_fold_step`
+# continues with, exactly as it does for the `foreach` family above.
+#
+# A *left* fold, and the expansion keeps it one: `op` is the caller's and need not be associative, so
+# the nesting is built inside out rather than halved.
+#
+# Written out for the reason the rest of them are, and this is the walk the point was made on from
+# outside. `GeometricOptimizers` wrote three `Base.tail` folds for want of a zipped one here —
+# `l2norm`, `solution_scale` and `_dot` — and they cost 26 to 71 s to compile at 369 children on Julia
+# 1.12 and 1.13, against 0.65 to 1.47 s for the same code on 1.11.9 (issue #19).
+#
+# `scripts/wide_branch_cost.jl` sweeps that comparison here, and its `tailfold` control reproduces it:
+# on a 369-child branch the chain costs 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3,
+# where this body costs 2.11 s, 0.80 s and 0.47 s. The chain is the cheaper of the two on the compat
+# floor — that is not the argument. The argument is that one of them holds still across versions.
+#
+# **`op` is not annotated `::F where {F}` here, and that was measured rather than assumed.** Every
+# method above the leaf only passes `op` along, which is the shape the specialisation heuristic bites
+# on — and #19 asks for the annotation on that ground, having measured it costing `_sumsq_leaves` 128
+# bytes a leaf downstream. Annotating them changes nothing: a 369-leaf fold reached through a
+# `@noinline` caller costs 3 088 bytes at arity one and 6 160 at arity two, with the annotation and
+# without it, on 1.11.9 and 1.13.0-rc3 alike. The boxing is the *caller's* — annotating the caller
+# takes both figures to zero — so the note belongs in the docstring, where a consumer will read it,
+# rather than on signatures where it would look like it were doing something.
+@noinline _no_folded_skip_error() = throw(ArgumentError(string(
+    "`foldparameters` and `foldstorage` reduce every leaf they are given, so a set that is `nothing` ",
+    "would make the result a partial sum without saying so; fill the gaps in, or walk it with ",
+    "`foreachparameters` and accumulate into a `Ref`.")))
+
+@generated function _fold_zip(op, kind, acc, xs, rest...)
+    n = _children_arity(xs, rest)
+    ks = _branch_keys(xs)
+    any(r -> r === Nothing, rest) && _no_folded_skip_error()
+    expr = :acc
+    for i in 1:n
+        expr = Expr(:call, :_fold_step, :op, :kind, expr, :(getfield(xs, $i)),
+                    (_child_expr(ks, rest[j], j, i) for j in 1:length(rest))...)
+    end
+    expr
+end
+
+@inline _fold_step(op, ::typeof(freeparameters), args::Vararg{
+    Any, N}) where {N} = foldparameters(op, args...)
+@inline _fold_step(op, ::typeof(_storage_recurse), args::Vararg{
+    Any, N}) where {N} = foldstorage(op, args...)
 
 # `_map_zip`'s two arms return the children in different shapes: the written-out body a `Tuple`, which
 # has to be keyed, and `Base.map` over a `NamedTuple` a `NamedTuple` that is keyed already. Selecting

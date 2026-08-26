@@ -43,6 +43,18 @@
 # script is the one that reaches past 369 and the one that varies the nesting; read its 369 row against
 # this one's the way its 13.40 s reads against the 13.50 s above, a tenth of a second apart.
 #
+# **The fold is swept in three columns, and the third of them is not this package's code.** `fold` and
+# `foldzip` are `foldparameters` at arity one and two; `tailfold` is the `Base.tail` recursion over
+# `values` that a consumer writes when the zipped fold does not exist, which is what
+# `GeometricOptimizers` wrote three of. The package's own fold was the one walk this sweep never timed
+# — `test/wide_branch_tests.jl` folds 369 children but asserts only the value, so what stood in for a
+# figure was the suite's total wall clock. A column that is not swept is a column whose behaviour is
+# not known, which is D16 and D19's lesson pointed at an argument rather than at a clock.
+#
+# That control column is what makes the run long: it compiles a `k`-level chain, so the two 369 rows
+# cost about half a minute each on Julia 1.12 and 1.13 and the whole sweep runs in minutes. It is worth
+# it, because without it the two fold columns are numbers with nothing to be read against.
+#
 # Both shapes are still swept, for two reasons: a consumer holds a `NetworkParameters`, so a sweep of
 # bare sets alone would report a shape nobody has, and two columns that agree are how the asymmetry
 # coming back would be noticed.
@@ -102,6 +114,19 @@ _thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
 # walks began indexing them in place.
 _touch!(d, s) = (@inbounds d[begin] = s[begin]; nothing)
 
+# One op at both arities, so the two fold columns differ in the arity and in nothing else.
+_fold_op(acc, x) = acc + sum(x)
+_fold_op(acc, x, y) = acc + sum(x) * sum(y)
+
+# The control, written the way `GeometricOptimizers`' three folds are written: `Base.tail` over
+# `values`, no `@inline`, one method per shape. It is the column that costs the minutes, and it is the
+# one the other two are read against.
+_tail_fold(ps::NetworkParameters) = _tail_fold(params(ps))
+_tail_fold(ps::NamedTuple) = _tail_fold(values(ps))
+_tail_fold(::Tuple{}) = false
+_tail_fold(t::Tuple) = _tail_fold(first(t)) + _tail_fold(Base.tail(t))
+_tail_fold(x) = sum(x)
+
 # `map(zero, ·)` is the floor the other columns are read against, and it is `Base`'s function rather than
 # one of this package's — so it is measured on the `NamedTuple` in both shapes, and the wrapped column
 # reports the same figure as the bare one by construction.
@@ -114,7 +139,8 @@ _leaves(ps) = ps
 const WIDTHS = (16, 32, 48, 64, 128, 369)
 
 header() = println(rpad("shape", 10), rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
-                   rpad("mapparams", 11), rpad("flatten", 9), rpad("unflatten", 11),
+                   rpad("mapparams", 11), rpad("fold", 8), rpad("foldzip", 9), rpad("flatten", 9),
+                   rpad("unflatten", 11), rpad("tailfold", 10),
                    "allocs flatten!/unflatten!/mapparameters!")
 
 # One width in one shape, in a process that has compiled nothing for either. Within the row the order
@@ -126,10 +152,16 @@ function sweep_one(shape::Symbol, k)
     t_layout = first_call(parameterlayout, ps)
     t_map = first_call(x -> map(zero, x), _leaves(ps))
     t_mapp = first_call(x -> mapparameters(zero, x), ps)
+    t_fold = first_call(x -> foldparameters(_fold_op, zero(T), x), ps)
+    t_foldzip = first_call(x -> foldparameters(_fold_op, zero(T), x, x), ps)
     t_flat = first_call(flatten, ps)
 
     v, layout = flatten(ps)
     t_unflat = first_call(x -> unflatten(layout, x), v)
+
+    # last in the row because it shares nothing with the columns above it and is the one that costs
+    # minutes: it compiles a `k`-level `Base.tail` chain, which is what the rest of the row does not
+    t_tail = first_call(_tail_fold, ps)
 
     buf = similar(v)
     dest = unflatten(layout, zero(v))
@@ -140,7 +172,8 @@ function sweep_one(shape::Symbol, k)
     a_mapp = _thunk_allocs(() -> mapparameters!(_touch!, dest, ps))
 
     println(rpad(shape, 10), rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
-            rpad(t_flat, 9), rpad(t_unflat, 11), a_flat, "/", a_unflat, "/", a_mapp)
+            rpad(t_fold, 8), rpad(t_foldzip, 9), rpad(t_flat, 9), rpad(t_unflat, 11),
+            rpad(t_tail, 10), a_flat, "/", a_unflat, "/", a_mapp)
     flush(stdout)
 end
 

@@ -48,6 +48,10 @@ _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
 # obvious way. `@allocated thunk()` takes no arguments to splat.
 _thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
 
+# `@noinline` and `::F where {F}`, and both matter: inlining would hide the question, and the
+# annotation is the answer to it. See the assertion below.
+@noinline _folded_through(op::F, ps, rest...) where {F} = foldparameters(op, 0.0f0, ps, rest...)
+
 @testset "flatten and unflatten reach a branch of $k children" for k in WIDTHS
     ps = wide_set(k)
     v, layout = flatten(ps)
@@ -86,6 +90,13 @@ end
     @test foldparameters((acc, x) -> acc + sum(x), 0.0f0, ps) ==
           sum(sum, values(ps))
 
+    # the zipped fold, which is the arity `GeometricOptimizers` wrote three `Base.tail` recursions
+    # for want of — see issue #19
+    @test foldparameters((acc, x, y) -> acc + sum(x) * sum(y), 0.0f0, ps, ps) ==
+          sum(abs2 ∘ sum, values(ps))
+    @test foldstorage((acc, x, y) -> acc + sum(x) * sum(y), 0.0f0, ps, ps) ==
+          sum(abs2 ∘ sum, values(ps))
+
     dest = mapparameters(zero, ps)
     mapparameters!(copyto!, dest, ps)
     @test dest == ps
@@ -122,6 +133,23 @@ end
     # the `nothing` skip too: it used to fill the branch with a fresh tuple of `nothing`s per call
     @test _thunk_allocs(() -> foreachparameters(bump2, dest, nothing)) == 0
 
+    # the folds at every arity
+    fold1(acc, x) = acc + sum(x)
+    fold2(acc, x, y) = acc + sum(x) * sum(y)
+    fold3(acc, x, y, z) = acc + sum(x) * sum(y) * sum(z)
+    @test _thunk_allocs(() -> foldparameters(fold1, 0.0f0, ps)) == 0
+    @test _thunk_allocs(() -> foldparameters(fold2, 0.0f0, ps, ps)) == 0
+    @test _thunk_allocs(() -> foldparameters(fold3, 0.0f0, ps, ps, ps)) == 0
+    @test _thunk_allocs(() -> foldstorage(fold2, 0.0f0, ps, ps)) == 0
+
+    # and the claim the `foldparameters` docstring makes to a consumer: a fold reached through a
+    # function that hands `op` on is allocation-free *because* that function annotates it
+    # `::F where {F}`. Without the annotation the same call costs 3 088 bytes here and 6 160 at arity
+    # two, on Julia 1.11 and 1.13 alike — the boxing is the caller's, not the walk's, which is why
+    # this package's own signatures do not carry it
+    @test _thunk_allocs(() -> _folded_through(fold1, ps)) == 0
+    @test _thunk_allocs(() -> _folded_through(fold2, ps, ps)) == 0
+
     # and the walk really ran, rather than being elided as the dead code a side-effect-free `f` is
     @test counted[] > 0
     mapparameters!(copyto!, dest, ps)
@@ -151,9 +179,11 @@ end
     # temporary per branch per argument costs the most
     counted = Ref(0)
     bump2(_, _) = (counted[] += 1; nothing)
+    fold2(acc, x, y) = acc + sum(x) * sum(y)
     @test _thunk_allocs(() -> mapparameters!(bump2, dest, ps)) == 0
     @test _thunk_allocs(() -> mapstorage!(bump2, dest, ps)) == 0
     @test _thunk_allocs(() -> foreachparameters(bump2, dest, nothing)) == 0
+    @test _thunk_allocs(() -> foldparameters(fold2, 0.0f0, ps, ps)) == 0
     @test counted[] > 0
 end
 
@@ -191,6 +221,8 @@ wrapped_set(k) = NetworkParameters(wide_set(k))
     bump2(_, _) = (counted[] += 1; nothing)
     @test _thunk_allocs(() -> mapparameters!(bump2, dest, ps)) == 0
     @test _thunk_allocs(() -> mapstorage!(bump2, dest, ps)) == 0
+    @test _thunk_allocs(() -> foldparameters((acc, x, y) -> acc + sum(x) * sum(y),
+        0.0f0, ps, ps)) == 0
     @test counted[] > 0
 end
 
