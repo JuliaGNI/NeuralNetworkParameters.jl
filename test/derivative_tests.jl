@@ -105,6 +105,29 @@ end
     @test g.a == [1.0, 1.0]
 end
 
+@testset "a set the reverse pass never touched comes back as `nothing`" begin
+    # The extension rewraps the pullback's `NamedTuple`, and when the reverse pass touched none of the
+    # parameters there is no `NamedTuple` to rewrap: one `nothing` stands for the whole set and cannot
+    # be spread over `keys(ps)`. It used to raise `MethodError: no method matching _values(::Nothing)`
+    # here, where the bare `NamedTuple` the set wraps returns `nothing` quite happily — so a loss that
+    # reads only the layout, or a frozen sub-network, failed on the wrapper and not on its contents.
+    @test Zygote.gradient(p -> 1.0, ps) === (nothing,)
+    @test Zygote.gradient(p -> Float64(length(flatten(p)[2])), ps) === (nothing,)
+    @test Zygote.gradient(p -> 1.0, params(ps)) === (nothing,)      # what it has to agree with
+    # a set that *was* touched still comes back wrapped, holes and all
+    @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
+end
+
+@testset "`nothing` is a structural zero for the `flatten` rules too" begin
+    # `_normalized` is explicit that `nothing` means "no derivative"; the `flatten` pullback took
+    # `ZeroTangent` and not `nothing`, so the two spellings disagreed on the one path Zygote does not
+    # take — a caller invoking the rule directly got a `MethodError` instead of a zero.
+    (_, _), pb1 = ChainRulesCore.rrule(flatten, ps)
+    @test pb1(nothing) == (ChainRulesCore.NoTangent(), ChainRulesCore.ZeroTangent())
+    (_, _), pb2 = ChainRulesCore.rrule(flatten, Float64, ps)
+    @test pb2(nothing)[3] == ChainRulesCore.ZeroTangent()
+end
+
 @testset "a structural zero contributes nothing to the promotion" begin
     @test NeuralNetworkParameters.parameter_eltype(ChainRulesCore.ZeroTangent()) === Union{}
     @test NeuralNetworkParameters.parameter_eltype((a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
@@ -136,6 +159,28 @@ _pullback_allocs(pb, Δ) = @allocated pb(Δ)
     flat = NetworkParameters((a = L, b = L, c = L, d = L))
     layered = NetworkParameters((L1 = (a = L,), L2 = (b = L,), L3 = (c = L,), L4 = (d = L,)))
     @test _cost(layered) == _cost(flat)
+end
+
+@testset "the pullback does not pay to find a structured leaf's storage" begin
+    # `_storage_field` asks which of the prototype's fields `freeparameters` handed back, and used to
+    # ask it with a `for` over `fieldnames(typeof(prototype))`: `getfield` at a runtime `Symbol` comes
+    # back as the union of the type's field types, so the comparison was dispatched dynamically once
+    # per field. Written out, the names are literals and every one of them is constant. Measured on
+    # `Sym`, whose storage is one of two fields: 176 bytes a call as a loop, 144 written out.
+    #
+    # Bounded rather than equated, on both counts: the figure is the whole pullback's and not this
+    # walk's, and `@allocated` jitters on Windows.
+    sp = NetworkParameters((L1 = (W = sample_sym(), b = [1.0, 2.0]),))
+    sv, sl = flatten(sp)
+    _, spb = ChainRulesCore.rrule(unflatten, sl, sv)
+    Δs = ChainRulesCore.Tangent{Any}(params = ChainRulesCore.Tangent{Any}(
+        L1 = ChainRulesCore.Tangent{Any}(
+            W = ChainRulesCore.Tangent{Any}(S = [1.0, 1.0, 1.0], n = ChainRulesCore.NoTangent()),
+            b = [1.0, 1.0])))
+    _pullback_allocs(spb, Δs)                          # warm up the call and the measurement
+    @test _pullback_allocs(spb, Δs) ≤ 160
+    # and it still reads the right numbers into the right places
+    @test spb(Δs)[3] == ones(5)
 end
 
 @testset "a tuple branch reads a cotangent shorter than itself" begin

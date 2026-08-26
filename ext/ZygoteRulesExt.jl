@@ -18,8 +18,8 @@ function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
     y, pb = ZygoteRules.pullback(f, NamedTuple{keys(ps)}(values(ps)))
 
     function network_parameters_pullback(output)
-        p̄ = pb(output)[1]
-        (NetworkParameters(NamedTuple{keys(ps)}(_values(p̄))),)
+        p̄ = _values(pb(output)[1])
+        (p̄ === nothing ? nothing : NetworkParameters(NamedTuple{keys(ps)}(p̄)),)
     end
 
     y, network_parameters_pullback
@@ -27,5 +27,12 @@ end
 
 _values(nt::NamedTuple) = values(nt)
 _values(nt::NamedTuple{(:params,), Tuple{AT}}) where {AT <: NamedTuple} = _values(nt.params)
+
+# A reverse pass that touched none of the parameters hands back a structural zero for the whole set,
+# and there is nothing to rewrap: `keys(ps)` has as many entries as the set has layers and one
+# `nothing` cannot stand for each of them. So the hole is passed straight out, which is what Zygote
+# gives for the bare `NamedTuple` — a loss reading only the layout, or a frozen sub-network, would
+# otherwise raise where the unwrapped parameters return `nothing`.
+_values(::Nothing) = nothing
 
 end

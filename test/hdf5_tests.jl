@@ -31,6 +31,22 @@ end
     @test back == ps
 end
 
+@testset "a branch with no parameters round trips" begin
+    # An activation, a reshape or a dropout layer contributes an empty branch, and every other part of
+    # this package carries one: `_layout` has an `n == 0` case per branch type and an empty set
+    # flattens to an empty vector. Writing one used to fail in the key attribute, where the
+    # comprehension over no keys is solved as `Vector{Union{}}` and HDF5 rejects it with a `TypeError`
+    # naming neither the branch nor the file.
+    for ps in (NetworkParameters(NamedTuple()),
+        NetworkParameters((L1 = NamedTuple(), L2 = (W = [1.0],))),
+        NetworkParameters((L1 = (W = [1.0], t = ()),)))
+        f = tmp()
+        @test save(f, ps) == f
+        @test load(NetworkParameters, f) == ps
+        @test load(NetworkParameters, f, ps) == ps      # and against a prototype
+    end
+end
+
 @testset "element type is preserved" begin
     f = tmp()
     save(f, NetworkParameters((a = Float32[1, 2],)))

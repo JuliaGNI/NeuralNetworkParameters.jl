@@ -4,6 +4,74 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] — 2026-08-27
+
+An audit of the package for correctness, type piracy, type instability and avoidable allocations.
+Three of those four come back clean and stay that way: there is no piracy, every method here naming a
+type the package owns; the eight in-place walks still measure 0 B at 32, 48 and 369 children at both
+arities; and inference is concrete everywhere it is claimed to be, the `_map_zip` hand-off to
+`Base.map` past 32 children included, which is a compile-time trade and not a defect. What it turned
+up is below.
+
+### Fixed
+
+- **A gradient of a set the reverse pass never touched raised instead of returning `nothing`.**
+  `ZygoteRulesExt` rewraps the pullback's `NamedTuple`, and when the reverse pass touched none of the
+  parameters there is no `NamedTuple` to rewrap: one `nothing` stands for the whole set and cannot be
+  spread over `keys(ps)`. That case was unhandled, so it was a `MethodError: no method matching
+  _values(::Nothing)` — on the wrapper, where the bare `NamedTuple` it wraps returns `nothing` quite
+  happily. `Zygote.gradient(p -> 1.0, ps)` and a loss reading only the layout both failed; a frozen
+  sub-network is the shape a consumer meets it in. The hole now passes straight out, which is what
+  Zygote gives for the unwrapped parameters. A set that *was* touched is unchanged, holes and all.
+
+- **A branch with no parameters could not be written to HDF5.** `_save_keyed` built its key attribute
+  with `[String(k) for k in keys(nt)]`, whose element type over an empty branch is solved as
+  `Union{}` — and HDF5 refuses a `Vector{Union{}}` attribute with a `TypeError` naming neither the
+  branch nor the file. So `save` failed both for an empty set and for a set holding one parameter-free
+  layer, which is what an activation, a reshape or a dropout layer contributes. Everything else here
+  already carried an empty branch: `_layout` has an `n == 0` case per branch type, an empty set
+  flattens to an empty vector, and the roundtrip through `unflatten` is exact. Typing the
+  comprehension is the whole fix; `h5save(::Tuple)` escaped it only because `eachindex(())` is a
+  `Base.OneTo`, and is typed to match.
+
+- **`nothing` was not a structural zero for the `flatten` rules.** `_normalized` is explicit that it
+  is one, and `_flat_cotangent` took `AbstractZero` and `Tuple` but not `Nothing`, so the two
+  spellings of "no derivative" disagreed on the one path Zygote does not take — it converts a
+  `nothing` to a `ZeroTangent` before an `rrule` sees it, so a caller invoking the rule directly got a
+  `MethodError` where the other spelling got a zero.
+
+- **`fp[:L1]` inferred a `Union` where `fp.L1` inferred the layer.** The two spellings read a layer off
+  the flat form with the same body, and only `getproperty` was `@inline`d. Without it the literal is
+  not propagated into `_child_layout`, the child layout comes back as the union of every layer's, and
+  `unflatten` is dispatched dynamically. `ps[:L1]` and `ps.L1` on a `NetworkParameters` already agreed.
+
+- **A single-leaf set unflattened against its own flat form gave a reshaped `FlatParameters` for a
+  leaf.** `fp[l.range]` at full length goes through `similar`, which keeps the layout, so the leaf came
+  back as a reshaped parameter set rather than the ordinary array `unflatten` promises. Fixed at the
+  leaf, which is where the read happens and the one place a method is not ambiguous with the branch
+  cases. No aliasing was involved either way — indexing a range copies.
+
+### Changed
+
+- **`_storage_field` is written out**, for the reason `_accumulate_named!` above it is: a `for` over
+  `fieldnames(typeof(prototype))` indexes the struct at a *runtime* `Symbol`, so `getfield` comes back
+  as the union of the type's field types and the comparison is dispatched dynamically once per field.
+  Measured on a leaf whose storage is one of two fields, reverse pass warmed, fresh process per
+  reading, Julia 1.13.0-rc3 on an Apple M4 Max: **176 B a call as a loop, 144 B written out.** Pinned
+  as a bound, since the figure is the whole pullback's and not this walk's.
+
+- **The three branch cases of `unflatten` are written once**, over `AbstractVecOrMat` rather than once
+  for a vector and again for a Jacobian. They recurse and put the children back in the shape of the
+  branch, and neither step reads an entry; only the two leaf cases genuinely differ, a leaf taking its
+  own stretch of a vector and being rebuilt against the prototype, and taking the corresponding *rows*
+  of a Jacobian and not being.
+
+- **`_layout`'s two branch generators share the body they emit.** They differed only in the layout
+  wrapped round the children, so `_layout_body` builds the serial-offset body and each generator says
+  only that. The emitted code is unchanged, so the head of `layout.jl` still governs — the child walk
+  and the wrapping still happen in one generated body, which is the thing that made it cheap. Being a
+  helper a generator calls, it sits above both of them and `test/world_age_tests.jl` covers it.
+
 ## [0.2.5] — 2026-08-26
 
 ### Fixed
@@ -740,6 +808,7 @@ The initial release: the `NetworkParameters` container and its flat `FlatParamet
 [#18]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/pull/18
 [#19]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19
 [#22]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/22
+[0.2.6]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.6
 [0.2.5]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.5
 [0.2.4]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.4
 [0.2.3]: https://github.com/JuliaGNI/NeuralNetworkParameters.jl/releases/tag/v0.2.3

@@ -39,6 +39,12 @@ end
 
 # `flatten` returns a tuple, so its cotangent is a tangent *for the tuple*; only the first component,
 # the one for the flat vector, carries anything.
+#
+# `nothing` is a structural zero here as it is everywhere else in this file — the convention
+# `_normalized` states. Zygote converts one to a `ZeroTangent` before it reaches an `rrule`, so this
+# method is for a caller that invokes the rule directly; without it the two spellings of "no
+# derivative" disagree, and only the one Zygote does not use raises.
+_flat_cotangent(::Nothing) = nothing
 _flat_cotangent(Δ::ChainRulesCore.AbstractZero) = nothing
 _flat_cotangent(Δ::Tuple) = _normalized(first(Δ))
 _flat_cotangent(Δ::ChainRulesCore.Tangent) = _normalized(first(ChainRulesCore.backing(Δ)))
@@ -184,11 +190,18 @@ end
 
 _storage_from_backing(_, Δ) = Δ
 
-function _storage_field(prototype, storage)
-    for f in fieldnames(typeof(prototype))
-        getfield(prototype, f) === storage && return f
+# Written out for the reason `_accumulate_named!` above is, and this is the same walk's tail: a `for`
+# over `fieldnames(typeof(prototype))` indexes the struct at a *runtime* `Symbol`, so `getfield` comes
+# back as the union of the type's field types and the comparison is dispatched dynamically once per
+# field. Splicing the names in as literals keeps every one of them constant. Measured on a leaf whose
+# storage is one of two fields, reverse pass warmed, one process per reading: 176 B a call as a loop,
+# 144 B written out.
+@generated function _storage_field(prototype, storage)
+    expr = :nothing
+    for f in reverse(fieldnames(prototype))
+        expr = :(getfield(prototype, $(QuoteNode(f))) === storage ? $(QuoteNode(f)) : $expr)
     end
-    nothing
+    expr
 end
 
 # `freeparameters` of the prototype tells us which of the tangent's fields are the storage. Neither

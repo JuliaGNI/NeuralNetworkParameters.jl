@@ -184,9 +184,20 @@ end
 #
 # The offset threads left to right, as the recursion this replaces did: the ranges a layout hands out
 # are the order `flatten` writes in.
-@generated function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
-    n = length(Keys)
-    n == 0 && return :((NestedLayout(NamedTuple{$Keys}(()), (offset + 1):offset), offset))
+# Both generators emit the same body and differ only in what is wrapped round the children, so the
+# body is built once here and each of them says only that. `wrap` receives the expression holding the
+# `k` children and the symbol holding the offset past the last of them, and returns the layout
+# expression. It runs in the generator, so the code that reaches the compiler is what it was when the
+# two bodies were written out in full — the head of this file's argument about fusing the child walk
+# and the wrapping into one generated body is untouched, since both still happen in one.
+#
+# The empty branch takes `offset` as its own final offset, which is what makes its range the empty
+# `(offset + 1):offset`.
+#
+# **A helper called from a generator, so it has to be defined above both of them** — see the note in
+# `walk.jl` on world age, which `test/world_age_tests.jl` pins.
+function _layout_body(n::Int, wrap)
+    n == 0 && return :(($(wrap(:(()), :offset)), offset))
     body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
     for i in 2:n
         push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
@@ -196,24 +207,17 @@ end
     final = Symbol(:off_, n)
     quote
         $(body...)
-        NestedLayout(NamedTuple{$Keys}($children), (offset + 1):$final), $final
+        $(wrap(children, final)), $final
     end
 end
 
+@generated function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
+    _layout_body(length(Keys),
+        (cs, final) -> :(NestedLayout(NamedTuple{$Keys}($cs), (offset + 1):$final)))
+end
+
 @generated function _layout(ps::Tuple, offset::Int)
-    n = fieldcount(ps)
-    n == 0 && return :((TupleLayout((), (offset + 1):offset), offset))
-    body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
-    for i in 2:n
-        push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
-            _layout(getfield(ps, $i), $(Symbol(:off_, i - 1)))))
-    end
-    children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
-    final = Symbol(:off_, n)
-    quote
-        $(body...)
-        TupleLayout($children, (offset + 1):$final), $final
-    end
+    _layout_body(fieldcount(ps), (cs, final) -> :(TupleLayout($cs, (offset + 1):$final)))
 end
 
 # A leaf, terminal or wrapped, decided by **dispatch on the storage's type** rather than by an `if`

@@ -55,7 +55,7 @@ end
 function h5save(h5::HDF5.H5DataStore, t::Tuple, path::AbstractString)
     g = _group(h5, path)
     _set_attr!(g, KIND_ATTR, "Tuple")
-    _set_attr!(g, KEYS_ATTR, [string(i) for i in eachindex(t)])
+    _set_attr!(g, KEYS_ATTR, String[string(i) for i in eachindex(t)])
     for (i, v) in enumerate(t)
         h5save(g, v, string(i))
     end
@@ -72,8 +72,14 @@ function h5save(h5::HDF5.H5DataStore, x::Number, path::AbstractString)
     nothing
 end
 
+# `String[…]` and not `[…]`: over an empty branch the comprehension's element type is solved as
+# `Union{}`, and HDF5 cannot write a `Vector{Union{}}` attribute — it asks for an `AbstractArray`
+# convertible to `Cstring` and says so with a `TypeError` naming neither the branch nor the key. A
+# branch with no parameters is an ordinary thing for a network to have, since an activation, a reshape
+# or a dropout layer contributes one, and every other part of this package already carries it: `_layout`
+# has an `n == 0` case per branch type and an empty set flattens to an empty vector.
 function _save_keyed(g, nt::NamedTuple)
-    _set_attr!(g, KEYS_ATTR, [String(k) for k in keys(nt)])
+    _set_attr!(g, KEYS_ATTR, String[String(k) for k in keys(nt)])
     for (k, v) in pairs(nt)
         h5save(g, v, String(k))
     end
