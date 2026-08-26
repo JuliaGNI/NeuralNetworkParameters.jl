@@ -317,8 +317,9 @@ Design points worth keeping in view:
 ```bash
 julia --project -e 'using Pkg; Pkg.test()'                                            # 509 tests
 julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
-julia --project=. scripts/wide_branch_cost.jl                                         # D12/D13/D17/D20/D22/D23
-julia --project=. scripts/leaf_layout_cost.jl                                         # D21
+
+julia --project=. scripts/wide_branch_cost.jl    # D12/D13/D17/D20/D22/D23
+julia --project=. scripts/leaf_layout_cost.jl    # D21
 ```
 
 The sweep prints two shapes at every width, bare and inside a `NetworkParameters`, each in a process of
@@ -339,10 +340,10 @@ D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at bot
 `foldstorage` at both arities, `parameter_eltype` and the `NetworkParameters` constructor that runs it,
 the `unflatten` pullback, and the in-place forms at zero allocations, and a 48-child one inside a
 `NetworkParameters` for the same round trip and the same zero allocations. The element-type assertions
-cover all four shapes — bare, positional, wrapped and a branch of branches — because D23 was paid on
-each of them and visible on only some. It asserts the properties and not the timings, because a wall-clock bound would be a
-flake on a loaded machine; the regression test is that the file *completes*, which before 0.2.2 it
-did not. It costs the suite about 45 s on Julia 1.13 and
+cover all four shapes — bare, positional and wrapped at both widths, a branch of branches at 48 —
+because D23 was paid on each of them and visible on only some. It asserts the properties and not the
+timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
+the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
 about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
 width a consumer has rather than the width that is convenient.
 

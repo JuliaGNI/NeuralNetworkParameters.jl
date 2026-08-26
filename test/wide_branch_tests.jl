@@ -259,7 +259,7 @@ _rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
 
 @testset "the element type of a branch of $k children costs nothing" for k in WIDTHS
     ps = wide_set(k)
-    tup = Tuple(values(ps))
+    tup = values(ps)
     wrapped = NetworkParameters(ps)
 
     for x in (ps, tup, wrapped)
@@ -297,8 +297,9 @@ _rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
     @test _rrule_allocs(ps) - _rrule_typed_allocs(ps) < 8k
 end
 
-# 48 × 2, for the reason the comment above gives: it is the width of the outer branch that decided the
-# cost, so this shape allocated where a 16 × 24 set of more leaves did not.
+# 48 and not 369, for the reason the round-trip testset above gives. What the nesting adds is asserted
+# all the same, because it is the width of the *outer* branch that decided the cost — so this shape
+# allocated where a 16 × 24 set of more leaves did not.
 @testset "a wide branch of branches costs nothing either at $k children" for k in (48,)
     ps = nested_set(k)
     _eltype_allocs(ps)

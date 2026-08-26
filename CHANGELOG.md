@@ -65,15 +65,16 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   behind `l2norm` and `solution_scale`, which is the order-dependence in their accumulator that they
   currently document instead.
 
-- **`test/wide_branch_tests.jl` asserts the element type at both widths**, in all four shapes — bare,
-  positional, wrapped and a branch of branches — together with the constructor that runs it, at exactly
-  zero. `flatten(ps)` against `flatten(T, ps)`, and the same pair on the reverse pass, are asserted as a
-  *bound* rather than an equality: `@allocated` reports the process-wide counter over its window and not
-  the call's own, so two readings of two multi-kilobyte calls differ by a few bytes on a loaded machine
-  — Windows CI reads 6 039 against 6 055 for that pair. The bound is `8k`, half the per-child cost of a
-  promotion taken over `values`, which separates the jitter from the defect by two orders of magnitude
-  at both widths. Inference is asserted too: it was never what allocated, and a fix that lost the
-  constant would be a different regression.
+- **`test/wide_branch_tests.jl` asserts the element type in all four shapes** — bare, positional and
+  wrapped at both widths, and a branch of branches at 48, which is already well past the unrolling
+  boundary — together with the constructor that runs it, at exactly zero. `flatten(ps)` against
+  `flatten(T, ps)`, and the same pair on the reverse pass, are asserted as a *bound* rather than an
+  equality: `@allocated` reports the process-wide counter over its window and not the call's own, so
+  two readings of two multi-kilobyte calls differ by a few bytes on a loaded machine — Windows CI reads
+  6 039 against 6 055 for that pair. The bound is `8k`, half the per-child cost of a promotion taken
+  over `values`, which separates the jitter from the defect by two orders of magnitude at both widths.
+  Inference is asserted too: it was never what allocated, and a fix that lost the constant would be a
+  different regression.
 
 - **`scripts/wide_branch_cost.jl` sweeps the element type**, in the allocations column. Read the bare
   column: the wrapped one is 0 by construction, since `parameter_eltype(::NetworkParameters{T})` is `T`
