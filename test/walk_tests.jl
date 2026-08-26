@@ -75,6 +75,50 @@ end
     @test length(visited) == 1
 end
 
+# `mapparameters` has always raised when two sets disagree on their keys; the in-place walks used to zip
+# them *by position* instead, so a gradient tree whose keys were ordered differently wrote every leaf
+# into the wrong parameter and said nothing. The check is in the generator now, which is why these are
+# `ArgumentError`s at specialisation time and cost the walk nothing.
+@testset "the in-place walks pair children by key, not by position" begin
+    dest = NetworkParameters((a = [0.0], b = [0.0]))
+
+    @test_throws "different keys" foreachparameters(
+        copyto!, dest, NetworkParameters((b = [10.0], a = [99.0])))
+    @test_throws "different keys" mapparameters!(
+        copyto!, dest, NetworkParameters((x = [1.0], y = [2.0])))
+    @test_throws "different keys" mapstorage!(
+        copyto!, dest, NetworkParameters((b = [1.0], a = [2.0])))
+    @test dest.a == [0.0] && dest.b == [0.0]
+
+    # a nested set is checked at the level the keys disagree on and not only at the top
+    @test_throws "different keys" mapparameters!(copyto!,
+        NetworkParameters((L = (W = [0.0], b = [0.0]),)),
+        NetworkParameters((L = (b = [1.0], W = [2.0]),)))
+
+    # the same keys in the same order still walk, whichever form each side arrives in
+    d = (a = [0.0], b = [0.0])
+    foreachparameters(copyto!, d, NetworkParameters((a = [1.0], b = [2.0])))
+    @test d == (a = [1.0], b = [2.0])
+end
+
+# A positional branch is the blocks of one multi-block leaf, so it is short — but `_tuple_for` used to
+# fill it against a `nothing` with an `ntuple` over a *runtime* length, which stops being inferable past
+# ten. The generated body splices the `nothing`s in as literals now, so there is no length to be runtime
+# about.
+@testset "a positional branch of more than ten blocks stays inferable" begin
+    blocks = ntuple(i -> [Float64(i)], 12)
+    @test only(Base.return_types(foreachparameters,
+        Tuple{typeof(sum), typeof(blocks), Nothing})) === Nothing
+
+    dest = ntuple(_ -> [0.0], 12)
+    foreachparameters(copyto!, dest, blocks)
+    @test dest == blocks
+
+    touched = Ref(0)
+    foreachparameters((_, _) -> (touched[] += 1), dest, nothing)
+    @test touched[] == 0
+end
+
 @testset "foldparameters" begin
     # whole leaves, so the structured leaves count their dense length
     @test foldparameters((n, x) -> n + length(x), 0, ps) == 2 + 1 + 4 + 9

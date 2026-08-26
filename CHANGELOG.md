@@ -4,6 +4,295 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-08-25
+
+**A branch with many children is usable.** 0.2.1 finished making the walks type stable and allocation
+free; this release makes them *compilable* on a branch wider than a couple of dozen children, which
+they were not.
+
+### Changed
+
+- **Julia 1.11 is now the minimum**, up from 1.10. The walks below are `@generated` bodies, and Julia
+  1.10 cannot inline one: neither `Expr(:meta, :inline)` in the generated body, nor `@inline` on the
+  declaration, nor `@inline` at the call site has any effect there — the call stays out of line. The
+  bodies are allocation-free on 1.10 too; what `flatten!` and `unflatten!` need from the inlining is
+  that it lets the temporaries at a branch boundary be elided. Without it, on 1.10, against 0.2.1:
+
+  | set | `flatten!` | `unflatten!` | `unflatten` |
+  |---|---|---|---|
+  | one with structured leaves | 0 → 192 | 0 → 608 | 576 → 1616 |
+  | a two-level `NamedTuple` | 0 → 0 | 0 → 176 | 960 → 1408 |
+
+  That is the guarantee 0.2.1 exists to provide, so on 1.10 the two cannot both be had. Julia 1.11 and
+  later elide those temporaries without inlining, and 1.11, 1.12 and 1.13 were each checked at zero on
+  a nested set, a set with structured leaves, a wide flat branch and a wide branch of branches.
+
+### Fixed
+
+- **Every walk across the children of one branch cost one specialisation per child.** The walk *down*
+  the tree is ordinary dispatch and was never the problem. The walk *across* was an `@inline`d
+  `Base.tail` chain, and `Base.tail` yields a new tuple type at every level — so a branch of `k`
+  children produced `k` specialisations whose argument types were each `O(k)` long, and inference on
+  that grew as `k³`.
+
+  Nine walks were written this way. Eight are written out instead, as a `@generated` flat body of `k`
+  statements reading `getfield(xs, 1) … getfield(xs, k)` at *literal* indices: one specialisation per
+  branch shape rather than `k`, no new tuple types at all, every index inferred at a constant, and the
+  same straight-line code the chain used to inline down to. They are `_flatten_children!`,
+  `_unflatten_children`, `_unflatten_children!` (`src/flatten.jl`), `_foreach_zip`, `_fold_children`,
+  `_anynothing` (`src/walk.jl`), `_promote_eltypes` (`src/leaves.jl`) and the two branch cases of
+  `_layout` (`src/layout.jl`).
+
+  The ninth, `_map_zip`, is written out **to 32 children and hands wider branches to `Base.map`**, and
+  the asymmetry is the point rather than an exception. Writing a body out costs compilation per branch
+  shape; `map` costs type stability past 32 fields, where `Base` drops to its `Any32` loop. Which of
+  those is the bad trade depends entirely on whether the walk runs in an inner loop. The eight above
+  do — `flatten!` and `unflatten!` once per optimizer iteration, `_unflatten_children` once per
+  objective evaluation through the closure a `Gradient` is built from — and there a dynamic dispatch
+  per child would be paid on every call. `_map_zip` is what `mapparameters` and `mapstorage` are, and a
+  consumer calls those once per cache, once per `changebackend`, once per `map_to_cpu`; there the same
+  dispatch is paid once, and the object handed back is concretely typed either way, so everything
+  downstream of it specialises normally.
+
+  What that is worth: `GeometricOptimizers` reaches six such primitives while building one
+  `OptimizerCache`, and on the 369-entry flat set that took **1.57 s on its 0.5.0 to 71.16 s** with
+  `_map_zip` written out at every width, against **2.41 s** with the split. See the note on `_map_zip`
+  in `src/walk.jl`, which carries the measurement.
+
+  First-call time, which is compilation plus a negligible run, on a flat `NamedTuple` of `k` leaves.
+  **Every figure below is cold**: `scripts/wide_branch_cost.jl` runs each width in a process of its own,
+  and the 0.2.1 column comes from running that same script against a worktree of `v0.2.1`, so the two
+  are comparable rather than merely recorded. Julia 1.11.9, Apple M4 Max.
+
+  Within one width the rows are *cumulative* — `parameterlayout` runs first and `flatten` builds a
+  layout too, so each row is what it adds to the ones above it. The total is what a consumer pays to
+  compile the whole path, and is the column to read:
+
+  | children | `parameterlayout` | `mapparameters` | `flatten` | `unflatten` | **total** |
+  |---|---|---|---|---|---|
+  | 16 | 0.05 → 0.07 | 0.05 → 0.05 | 0.09 → 0.09 | 0.15 → 0.12 | 0.40 → **0.40** |
+  | 32 | 0.12 → 0.08 | 0.13 → 0.12 | 0.25 → 0.18 | 0.46 → 0.26 | 0.97 → **0.65** |
+  | 48 | 0.19 → 0.15 | 0.22 → 0.04 | 0.37 → 0.30 | 0.66 → 0.39 | 1.45 → **0.89** |
+  | 64 | 0.29 → 0.21 | 0.43 → 0.04 | 0.62 → 0.43 | 1.12 → 0.53 | 2.47 → **1.22** |
+  | 128 | 1.85 → 0.65 | 1.43 → 0.05 | 2.08 → 2.25 | 3.63 → 1.14 | 9.00 → **4.10** |
+  | 369 | 12.32 → 1.35 | 8.56 → 0.09 | 12.82 → 14.39 | 22.32 → 4.38 | 56.03 → **20.22** |
+
+  `map(zero, ·)` is 0.01 s at every width on both and is omitted; it is in the harness as the floor —
+  what `Base` costs on the same branch, and what a consumer that wrote its own walk over `map` to get
+  around this was paying instead.
+
+  The `flatten` column is the one that goes the wrong way at the two largest widths, and it is a
+  re-attribution rather than a loss: `parameterlayout` no longer absorbs the shared compilation, so
+  `flatten` pays for it instead. Measured alone in its own process at 369 children, `flatten` is
+  13.78 s on 0.2.1 and 16.29 s here — a real 18 % — against 12.32 s and 1.36 s for `parameterlayout`.
+  That trade is taken deliberately; see the leaf-dispatch entry below for why the instability it
+  removes is worth more than the 18 %.
+
+  **An earlier draft of this entry quoted different figures**, and they are worth naming because of how
+  they were wrong rather than by how much. It had `flatten` at 17.57 s on 0.2.1 at 128 children and
+  "not run to completion" at 369 — where cold it is 2.08 s and 12.82 s, and completes. The *conclusion*
+  was right, and not one of the numbers supporting it was: the harness swept the widths in a single
+  process, so every row after the first was measuring what its predecessors had already compiled. The
+  `mapparameters` column suffered worst, reading as `0.00 s` what costs 0.09 s cold — and 1.51 s cold
+  before the `_map_zip` split above. `GeometricOptimizers` closed an issue of its own on that `0.00 s`.
+
+  The script forks per width now, so there is no ordering left to get wrong and no `--cold-map` flag to
+  remember: a figure is cold or it is not printed. That is the general lesson and it is cheap to state —
+  **a measurement you have to ask for in a special way is one the default run is getting wrong.**
+
+  Re-measured with the corrected harness — see the entry below on `first_call` — on Julia 1.13.0-rc2,
+  Apple M4 Max, one process per width, seconds, `0.2.1 → 0.2.2`:
+
+  | children | `parameterlayout` | `mapparameters` | `flatten` | `unflatten` | **total** |
+  |---|---|---|---|---|---|
+  | 16 | 0.04 → 0.10 | 0.08 → 0.15 | 0.09 → 0.11 | 0.12 → 0.10 | 0.33 → **0.46** |
+  | 32 | 0.08 → 0.13 | 0.22 → 0.26 | 0.22 → 0.16 | 0.35 → 0.25 | 0.87 → **0.80** |
+  | 48 | 0.58 → 0.20 | 1.09 → 0.10 | 1.31 → 0.23 | 1.26 → 0.46 | 4.24 → **0.99** |
+  | 64 | 1.32 → 0.22 | 2.63 → 0.10 | 3.15 → 0.32 | 2.95 → 0.72 | 10.05 → **1.36** |
+  | 128 | 7.75 → 0.51 | 24.49 → 0.12 | 27.84 → 0.70 | 25.82 → 2.01 | 85.90 → **3.34** |
+  | 369 | — → 1.73 | — → 0.17 | — → 2.48 | — → 19.27 | — → **24.65** |
+
+  The 369-child row has no 0.2.1 column: `parameterlayout` alone was still compiling after 20 minutes
+  in a process of its own, which is the "did not finish" of the original report, now with a lower bound
+  on it. Every other row is a completed measurement of both trees.
+
+  The shape is the same as the 1.11.9 table above and the margin is wider, because the figures the old
+  harness printed were missing the inference that is most of the cost. 16 children is the one width
+  where 0.2.2 is behind, by 0.13 s, which is a written-out body being compiled where a chain of four
+  was not — the trade the `_map_zip` note describes, at the width where it does not pay.
+
+  **The harness had a second way of not measuring the thing, and forking per width did not touch it.**
+  `first_call` timed a direct `f(args...)`, and compiling `first_call` itself infers through the call in
+  its body — so the inference the figure is *for* was spent while `first_call` was being compiled, before
+  its own `t = time()` ran. On Julia 1.13 that reads **0.00 s for every width in every column**;
+  `parameterlayout` on a 369-child branch, measured through an opaque call, is 1.61 s and `flatten` is
+  3.95 s. The call goes through `Base.invokelatest` now, so there is nothing left for the caller's
+  compilation to do first. Same lesson as the fork, from the other end: the harness has to be arranged so
+  that the cost cannot have been paid somewhere the clock is not looking.
+
+- **`_layout` on a leaf inferred as a three-way union, and a branch of 369 of them was what
+  `parameterlayout` cost.** The leaf method asked `freeparameters(x) === x` in an `if`, and that is a
+  runtime pointer comparison inference cannot fold — so `_layout(::Matrix{Float32}, ::Int)` came back
+  as `Union{Tuple{LeafLayout{2,Matrix{Float32}},Int}, Tuple{WrappedLayout{…},Int}, Tuple{WrappedLayout{…} where …,Int}}`.
+  One union per child is survivable; 369 of them is 11.7 s of inference.
+
+  Terminality is decided by **dispatch** now — `_layout_storage(x::T, ::T, offset)` against the general
+  method — and the branch construction is fused into the same `@generated` body that lays the children
+  out, rather than returning a `k`-element tuple for a caller to infer through. `parameterlayout` on
+  that set is **1.36 s**, and 25.2 s → 15.35 s on a 16 × 24 nested container.
+
+  Three other explanations were measured and ruled out first, which is why they are recorded: a
+  `@noinline` barrier on the child walk (11.78 s, no change), supplying `NestedLayout`'s type
+  parameters rather than letting them be solved (no change), and computing the child lengths first so
+  the children could be laid out *independently* — **worse**, 15.4 s, because it adds two more `k`-long
+  bodies. The serial offset dependency was never the cost: an "every child at the same offset" control
+  runs at 1.17 s against the real walk's 1.27 s.
+
+  One semantic edge changes with it. A leaf whose `freeparameters` returns a *distinct object of its
+  own type* is now treated as terminal where the `===` would have wrapped it. Nothing is lost: such a
+  type never worked, since `_layout` would descend into the storage, ask it for its own
+  `freeparameters`, and recurse without end unless it eventually changed type. [`isterminal`](@ref)
+  still asks the identity question and is still right to — it is a predicate a caller evaluates on a
+  value it holds, not a dispatch anything has to infer through.
+
+- **`flatten!` and `unflatten!` allocated on a branch of more than about forty children**, against the
+  guarantee in their own docstrings. Two temporary tuples were materialised per branch — `values(ps)`
+  and `values(l.children)` — which is free while a branch is narrow enough to keep in registers and is
+  not beyond that. Measured on the same flat sets on Julia 1.13, bytes per call from inside a
+  function:
+
+  | children | 16 | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|---|
+  | 0.2.1 | 0 | 0 | 70 288 | 160 928 | 770 624 | 6 608 576 |
+  | 0.2.2 | 0 | 0 | **0** | **0** | **0** | **0** |
+
+  Re-measured cold with the rest, which moved the 0.2.1 row: an earlier draft had 81 488 at 48 children
+  and 187 808 at 64, and "not reached" beyond, where the per-width harness reaches every one of them.
+  Same shape, same cliff, different numbers.
+
+  The walks index the branch in place with `getfield` now and take no `values` at all, so nothing is
+  materialised on the way in. This was found while fixing the entry above and is a separate defect:
+  narrowing the branch made it disappear, which is why the docstrings' claim had held up in testing.
+
+- **`mapparameters!`, `mapstorage!` and `foreachparameters` had the same defect, on the arm that takes a
+  second set** — and they are the walks that run every optimizer iteration, where `flatten!` runs once
+  or twice. The entry above removed the temporary from the branch being walked; each *further* argument
+  was still turned into a `values(...)` tuple per branch by `_values_for`, and a skipped set into a
+  fresh `map(_ -> nothing, keys)` tuple on top of that. Bytes per call of `mapparameters!(f, dest, src)`
+  on Julia 1.13:
+
+  | children | 16 | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|---|
+  | 0.2.1 | 0 | 0 | 23 488 | 54 848 | 265 408 | — |
+  | first written here | 0 | 0 | 800 | 1 088 | 2 176 | 6 144 |
+  | **now** | 0 | 0 | **0** | **0** | **0** | **0** |
+
+  The middle row is the point rather than the top one: removing the temporary from the branch *being*
+  walked took 23 488 bytes at 48 children down to 800, which looks like the defect closing and is the
+  cliff simply moved. A branch of branches, where every child is a branch to take apart rather than an
+  array, cost 3 168 bytes at 48 and 23 840 at 369 on the middle row.
+
+  Same cliff at the same width, for the same reason. `_foreach_zip` reads every one of its arguments
+  with `getfield` at a literal index now; `_values_for` and `_tuple_for` have no callers and are gone.
+  Zero at 4, 16, 32, 48, 64, 128 and 369 children, flat and nested, at arity one, two and three, and on
+  the `nothing`-skip path.
+
+  Not caught by the wide-branch tests as first written, which did call `mapparameters!` at 369 children
+  and asserted only its result. Measuring it needs a **zero-argument closure**: `@allocated f(a, b)`
+  lowers to `Base.allocated(f, a, b)`, and for a `Vararg` method — which all three of these are — the
+  splat inside `Base.allocated` allocates on its own account, inventing bytes the walk does not spend
+  and hiding the ones it does. `test/wide_branch_tests.jl` says so beside the harness.
+
+- **The in-place walks paired the children of two branches by *position*.** `_values_for(x, ks)` ignored
+  its `ks`, so `foreachparameters(copyto!, (a = …, b = …), (b = …, a = …))` wrote each leaf from the
+  wrong key and said nothing, where `mapparameters` has always raised. Two same-shaped sets whose keys
+  are ordered differently — a gradient tree built by hand, or merged from parts — silently crossed over.
+
+  The generated body checks the keys of a named argument against the branch's own, in the *generator*,
+  so the guard `mapparameters` pays `_check_keys` for at run time is free here. **This is a behaviour
+  change**: positional pairing of differently-keyed sets now raises `ArgumentError`. A `Tuple` branch
+  stays positional, because the blocks of a multi-block leaf have no keys to agree on.
+
+- **`mapparameters` and `mapstorage` re-selected every child they were just handed.** Past 32 children
+  `_map_zip` hands back a `NamedTuple` already keyed with `keys(ps)`, and both then ran it through
+  `NamedTuple{keys(ps)}(...)` again — a second `k`-wide generated selection and a copy, 6 272 bytes of
+  the 57 120 a call costs at 369 children. `_rewrap_children` keys the written-out arm's `Tuple` and
+  leaves the `map` arm's `NamedTuple` alone.
+
+- **The reverse pass indexed leaf cotangents one element at a time.** `_add_leaf_cotangent!` accumulated
+  with `enumerate(Δ)` and a scalar `Δv[o + i] += x`, while `flatten`'s docstring makes a point of the
+  forward path never indexing an element, "so it runs at memory bandwidth and works unchanged for GPU
+  arrays". It broadcasts over the leaf's stretch of the flat vector now, at the same 848 and 6 208 bytes
+  at 48 and 369 children, and reaches a device array on the same terms the forward path does.
+
+- **The arity check allocated on `mapparameters`' own path.** `_children_arity` took an untyped `rest...`
+  and walked it with `enumerate`; every caller but one reaches it from a generator, where that is free,
+  and `_map_zip` reaches it at run time, where it cost 48 bytes a call. It takes the further sets as one
+  tuple now and checks them with a chain over the *arity* — one or two, never a branch width.
+
+- `_tuple_for(::Nothing, n::Int)` filled a positional branch with `ntuple(_ -> nothing, n)`, which
+  infers as `Tuple{Vararg{Nothing}}` past ten blocks — the same instability the comment in
+  `src/derivatives.jl` records removing from `_matching_positional`. The generated body splices the
+  `nothing`s in as literals, so there is no length left to be runtime about.
+
+- **The reverse pass had the same two defects**, on the walk that turns a cotangent in the shape of the
+  parameters back into a flat gradient. `_accumulate_named!` was a `Base.tail` chain over
+  `values(l.children)` and `keys(l.children)`; it is written out now, with the branch's keys spliced in
+  as *literal* `Symbol`s — which is what keeps `_cotangent_get`'s `haskey` a compile-time question, the
+  property the chain had been relying on constant propagation for. `_matching_named` goes with it.
+
+  Bytes per pullback call, on the same flat sets and again on Julia 1.13:
+
+  | children | 16 | 32 | 48 | 64 | 128 | 369 |
+  |---|---|---|---|---|---|---|
+  | 0.2.1 | 320 | 576 | 70 592 | 161 504 | not reached | not reached |
+  | 0.2.2 | 320 | 576 | **848** | **1 120** | **2 112** | **6 208** |
+
+  Identical up to 32 children and 144× better at 64, which is the signature of the same cliff: below it
+  the temporary tuples stay in registers, above it they do not.
+
+  The two *positional* walks — `_accumulate_positional!` and `_matching_positional` — are deliberately
+  left as chains, and the comment beside them now says why: their length is the number of blocks of a
+  single leaf, two for a `StiefelLieAlgHorMatrix` and one for a Grassmann lift, so they are never wide
+  the way a branch of layers is.
+
+### Added
+
+- **`ParameterSet`**, exported: `Union{NetworkParameters, NamedTuple}`, the type to dispatch on when a
+  method takes *the parameters* and does not care which of the two forms it was handed.
+
+  Every package in this ecosystem was spelling that union out inline — `AbstractNeuralNetworks` at
+  eight sites, `GeometricMachineLearning` at fifteen, `GeometricOptimizers` at sixteen — and
+  `SymbolicNeuralNetworks` had named it `EquationSet` for the equation sets that share the shape. One
+  name means a reader meets the same type in all of them.
+
+  Its docstring states the two things it is not. It is **not** `isparametertree`, which is also true of
+  a `Tuple`, because a `Tuple` is a branch the walks recurse into — what `freeparameters` returns for a
+  multi-block leaf — and never a set of parameters handed in whole. And it puts no bound on the element
+  type or the depth, so it is **not** `GeometricOptimizers.ParameterContainer{T}`, which additionally
+  requires the `NamedTuple` half to be flat and element-type-homogeneous.
+
+- `test/wide_branch_tests.jl`, which walks a 369-child branch through `flatten`/`unflatten`,
+  `mapparameters` at both arities, `mapparameters!`, `foreachparameters` with and without the `nothing`
+  skip, `foldparameters` and `parameter_eltype`, and pins **every** in-place form at zero allocations
+  there — `flatten!` and `unflatten!`, and `mapparameters!`, `mapstorage!` and `foreachparameters` at
+  arity one, two and three and on the `nothing`-skip path. It also covers 48, either side of the 32
+  fields `Base` unrolls a tuple up to.
+
+  A 48-wide branch whose children are themselves branches is covered as well, and separately, because
+  the two shapes fail differently: a flat branch's children are arrays, which are heap objects
+  already, so a walk that reaches one has nothing to keep off the heap, while a branch of branches has
+  to be taken apart in place at every level. The width is a consumer's; the nesting is a network's.
+
+  It asserts the properties and not the timings — a wall-clock bound would be a flake on a loaded
+  machine — so the regression test is that the file *completes*, which before this release it did not.
+  It costs the suite about 45 s on Julia 1.13 and about 1 m 45 s on 1.11, all of it compilation at the
+  wide width, and that is the honest price of covering the width a consumer actually has.
+
+- `scripts/wide_branch_cost.jl`, the harness behind both tables above.
+
+[GeometricOptimizers#68]: https://github.com/JuliaGNI/GeometricOptimizers.jl/pull/68
+
 ## [0.2.1] — 2026-08-25
 
 ### Fixed

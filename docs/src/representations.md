@@ -9,6 +9,7 @@ CurrentModule = NeuralNetworkParameters
 ```@docs
 NetworkParameters
 params
+ParameterSet
 ```
 
 `NetworkParameters{T}` wraps a `NamedTuple` and forwards `getproperty`, `getindex`, `keys`, `values`,

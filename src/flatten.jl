@@ -79,10 +79,8 @@ end
 
 Write the numbers of `ps` into the existing vector `v`, and return `v`.
 
-Allocation-free when the `layout` is supplied and the call is made from compiled code, which is the
-point: an optimizer that flattens its parameters once per step, or twice per inner product, should not
-allocate a fresh vector each time. (Called from an uninferred context — the top level of a script, say —
-the recursion is not specialised and costs a few tens of bytes per leaf on Julia 1.10.)
+Allocation-free when the `layout` is supplied, which is the point: an optimizer that flattens its
+parameters once per step, or twice per inner product, should not allocate a fresh vector each time.
 
 ```julia
 v, layout = flatten(ps)          # once
@@ -101,7 +99,7 @@ function flatten!(v::AbstractVector, ps, layout::ParameterLayout)
 end
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
-@inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _flatten_children!(v, values(ps), values(l.children))
+@inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _flatten_children!(v, ps, l.children)
 @inline _flatten!(v, ps::Tuple, l::TupleLayout) = _flatten_children!(v, ps, l.children)
 @inline _flatten!(v, x, l::WrappedLayout) = _flatten!(v, freeparameters(x), l.inner)
 
@@ -110,10 +108,16 @@ end
     nothing
 end
 
-@inline _flatten_children!(v, ::Tuple{}, ::Tuple{}) = nothing
-@inline function _flatten_children!(v, xs::Tuple, ls::Tuple)
-    _flatten!(v, first(xs), first(ls))
-    _flatten_children!(v, Base.tail(xs), Base.tail(ls))
+# `getfield` and not `values(·)[i]`: taking `values` of a branch first materialises a temporary tuple
+# per branch, which at 64 children is where the last of the allocations were. `getfield(·, i)` reads
+# the child in place and serves a `NamedTuple` and a `Tuple` alike.
+@generated function _flatten_children!(v, xs, ls)
+    n = _children_arity(xs, (ls,))
+    calls = [:(_flatten!(v, getfield(xs, $i), getfield(ls, $i))) for i in 1:n]
+    quote
+        $(calls...)
+        nothing
+    end
 end
 
 @inline _copy_out!(v, doffs::Int, x::AbstractArray, n::Int) = (
@@ -155,7 +159,7 @@ cannot alias each other or the flat vector.
 """
 @inline unflatten(l::ParametersLayout, v::AbstractVector) = NetworkParameters(unflatten(l.inner, v))
 @inline unflatten(l::NestedLayout, v::AbstractVector) =
-    NamedTuple{keys(l.children)}(_unflatten_children(values(l.children), v))
+    NamedTuple{keys(l.children)}(_unflatten_children(l.children, v))
 @inline unflatten(l::TupleLayout, v::AbstractVector) = _unflatten_children(l.children, v)
 @inline unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
 @inline unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
@@ -174,25 +178,24 @@ are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing
 """
 @inline unflatten(l::ParametersLayout, J::AbstractMatrix) = NetworkParameters(unflatten(l.inner, J))
 @inline unflatten(l::NestedLayout, J::AbstractMatrix) =
-    NamedTuple{keys(l.children)}(_unflatten_children(values(l.children), J))
+    NamedTuple{keys(l.children)}(_unflatten_children(l.children, J))
 @inline unflatten(l::TupleLayout, J::AbstractMatrix) = _unflatten_children(l.children, J)
 @inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
 @inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
 
-# `unflatten` over the children of a branch layout, in the shape the rest of this package walks a
-# layout tree: `Base.tail` recursion, inlined, rather than `map` over a closure.
+# `unflatten` over the children of a branch layout, written out for the reason the head of `walk.jl`
+# gives rather than written as `map` over a closure.
 #
-# The two are equally inferable, but `map` leaves the closure over `data` to be elided and not every
-# version elides it. On Julia 1.11 the recursion halves what an `unflatten` call costs, from two heap
-# allocations per leaf to one; on 1.10 it is worth as much again on some shapes and nothing on others.
-# It also keeps the walk off `Base`'s `Any32` fallback, which `map` drops to past 32 children and
-# which returns a tuple with no concrete type.
+# The two are equally inferable, but `map` leaves the closure over `data` to be elided, and past 32
+# children it drops to `Base`'s `Any32` fallback, which returns a tuple with no concrete type. A
+# written-out body leaves no closure to elide and reaches no fallback, at any width.
 #
 # `data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
 # helper serves both.
-@inline _unflatten_children(::Tuple{}, _) = ()
-@inline _unflatten_children(layouts::Tuple, data) =
-    (unflatten(first(layouts), data), _unflatten_children(Base.tail(layouts), data)...)
+@generated function _unflatten_children(layouts, data)
+    calls = [:(unflatten(getfield(layouts, $i), data)) for i in 1:fieldcount(layouts)]
+    :(($(calls...),))
+end
 
 """
     unflatten!(ps, layout, v)
@@ -217,7 +220,7 @@ end
 
 @inline _unflatten!(ps::NetworkParameters, l::ParametersLayout, v) = _unflatten!(params(ps), l.inner, v)
 @inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unflatten_children!(
-    values(ps), values(l.children), v)
+    ps, l.children, v)
 @inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unflatten_children!(ps, l.children, v)
 @inline _unflatten!(x, l::WrappedLayout, v) = _unflatten!(freeparameters(x), l.inner, v)
 
@@ -231,8 +234,11 @@ function _unflatten!(x::Number, ::LeafLayout, _)
         "`; use the out-of-place `unflatten` for a parameter set with scalar leaves")))
 end
 
-@inline _unflatten_children!(::Tuple{}, ::Tuple{}, v) = nothing
-@inline function _unflatten_children!(xs::Tuple, ls::Tuple, v)
-    _unflatten!(first(xs), first(ls), v)
-    _unflatten_children!(Base.tail(xs), Base.tail(ls), v)
+@generated function _unflatten_children!(xs, ls, v)
+    n = _children_arity(xs, (ls,))
+    calls = [:(_unflatten!(getfield(xs, $i), getfield(ls, $i), v)) for i in 1:n]
+    quote
+        $(calls...)
+        nothing
+    end
 end

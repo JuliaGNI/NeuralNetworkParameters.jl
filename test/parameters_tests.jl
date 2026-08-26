@@ -135,3 +135,31 @@ end
 
     @test isconcretetype(only(Base.return_types(NetworkParameters, Tuple{typeof(nt)})))
 end
+
+# `ParameterSet` is the union four packages were spelling out inline. What matters about it is where
+# its edges are, so the tests are the boundary cases rather than the happy path.
+@testset "ParameterSet is either form of a whole parameter set" begin
+    @test ps isa ParameterSet
+    @test nt isa ParameterSet
+    @test nt.L1 isa ParameterSet          # a branch is one too: it is a set of parameters in itself
+    @test NamedTuple() isa ParameterSet
+
+    # a leaf is not, whatever kind of leaf it is
+    @test !([1.0, 2.0] isa ParameterSet)
+    @test !(1.0 isa ParameterSet)
+
+    # and neither is a `Tuple` -- which is where this parts company with `isparametertree`, because a
+    # `Tuple` *is* a branch the walks recurse into (it is what `freeparameters` returns for a
+    # multi-block leaf) but is never a set of parameters handed in whole
+    @test !(([1.0], [2.0]) isa ParameterSet)
+    @test NeuralNetworkParameters.isparametertree(([1.0], [2.0]))
+
+    # the two agree everywhere else, which is the statement that the `Tuple` is the whole difference
+    for x in (ps, nt, nt.L1, NamedTuple(), [1.0, 2.0], 1.0)
+        @test (x isa ParameterSet) == NeuralNetworkParameters.isparametertree(x)
+    end
+
+    # no bound on the element type and none on the depth: a mixed-precision, unevenly nested set is
+    # still one. This is the difference from `GeometricOptimizers.ParameterContainer{T}`.
+    @test (a = Float32[1.0], b = (c = Float64[2.0], d = (e = [3],))) isa ParameterSet
+end

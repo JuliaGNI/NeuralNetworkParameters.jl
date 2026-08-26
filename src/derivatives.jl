@@ -71,7 +71,7 @@ end
 
 function _accumulate!(Δv, l::NestedLayout, Δ)
     Δ === nothing && return Δv
-    _accumulate_named!(Δv, values(l.children), keys(l.children), _cotangent_backing(Δ))
+    _accumulate_named!(Δv, l.children, _cotangent_backing(Δ))
     Δv
 end
 
@@ -92,15 +92,24 @@ function _accumulate!(Δv, l::LeafLayout, Δ)
     Δv
 end
 
-# The branch walks, in the `Base.tail` shape the rest of the package walks a layout in. A `for` loop
-# over `keys(l.children)` reads the same, but it indexes a heterogeneous `NamedTuple` with a runtime
-# `Symbol`: the child layout comes back as the union of the branch's child types, so `_accumulate!` is
-# dispatched dynamically once per child on every reverse pass. The keys are a compile-time constant
-# and the recursion keeps them one, which is the same reason `_unflatten_children` exists.
-@inline _accumulate_named!(Δv, ::Tuple{}, ::Tuple{}, Δ) = nothing
-@inline function _accumulate_named!(Δv, ls::Tuple, ks::Tuple, Δ)
-    _accumulate!(Δv, first(ls), _normalized(_cotangent_get(Δ, first(ks))))
-    _accumulate_named!(Δv, Base.tail(ls), Base.tail(ks), Δ)
+# The named branch walk, written out for the reason the head of `walk.jl` gives. A `for` loop over
+# `keys(l.children)` reads the same, but it indexes a heterogeneous `NamedTuple` with a runtime
+# `Symbol`: the child layout comes back as the union of the branch's child types, so `_accumulate!`
+# would be dispatched dynamically once per child on every reverse pass. Splicing the keys in as
+# literals keeps every one of them constant, and keeps the branch to one specialisation rather than one
+# per child.
+#
+# This is the reverse pass of a branch that can be as wide as a network has layers, so it is the one
+# walk here that had to be rewritten. The two positional walks below are not: their length is the
+# number of *blocks of a single leaf* — two for a `StiefelLieAlgHorMatrix`, one for a Grassmann lift —
+# so they stay the chain they read best as.
+@generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ) where {Keys}
+    calls = [:(_accumulate!(Δv, getfield(children, $i),
+                            _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i])))))) for i in 1:length(Keys)]
+    quote
+        $(calls...)
+        nothing
+    end
 end
 
 # The positional walk consumes the cotangent alongside the layout rather than indexing into it, so it
@@ -114,13 +123,13 @@ end
 
 _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::Number) = (Δv[first(l.range)] += Δ; nothing)
 
+# Broadcast over the leaf's stretch of the flat vector and not a loop over its elements, for the reason
+# `flatten` copies with `copyto!`: an element of a leaf is never indexed individually, so the reverse
+# pass reaches a GPU array on the same terms the forward one does.
 function _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::AbstractArray)
     length(Δ) == length(l.range) || throw(DimensionMismatch(string(
         "cotangent of length ", length(Δ), " for a leaf of length ", length(l.range))))
-    o = first(l.range) - 1
-    for (i, x) in enumerate(Δ)
-        Δv[o + i] += x
-    end
+    @views Δv[l.range] .+= vec(Δ)
     nothing
 end
 
@@ -182,17 +191,21 @@ function _storage_field(prototype, storage)
     nothing
 end
 
-# `freeparameters` of the prototype tells us which of the tangent's fields are the storage. Both cases
-# recurse rather than closing over `nt`, for the reason `_unflatten_children` does — and the positional
-# one used to be an `ntuple` over a *runtime* length, which stops being inferable past ten blocks.
+# `freeparameters` of the prototype tells us which of the tangent's fields are the storage. Neither
+# case closes over `nt`, for the reason `_unflatten_children` does not — and the positional one used to
+# be an `ntuple` over a *runtime* length, which stops being inferable past ten blocks.
+#
+# Both walk the storage of *one leaf*, so neither is wide the way a branch of layers is; the named one
+# is written out all the same, because splicing the keys in as literals is what keeps
+# `_cotangent_get`'s `haskey` a compile-time question.
 _matching_storage(storage::NamedTuple, nt::NamedTuple) =
-    NamedTuple{keys(storage)}(_matching_named(keys(storage), nt))
+    NamedTuple{keys(storage)}(_matching_named(storage, nt))
 _matching_storage(storage::Tuple, nt::NamedTuple) = _matching_positional(storage, values(nt))
 _matching_storage(_, nt::NamedTuple) = nt
 
-@inline _matching_named(::Tuple{}, _) = ()
-@inline _matching_named(ks::Tuple, nt) =
-    (_cotangent_get(nt, first(ks)), _matching_named(Base.tail(ks), nt)...)
+@generated function _matching_named(storage::NamedTuple{Keys}, nt) where {Keys}
+    :(($((:(_cotangent_get(nt, $(QuoteNode(k)))) for k in Keys)...),))
+end
 
 @inline _matching_positional(::Tuple{}, _) = ()
 @inline _matching_positional(storage::Tuple, Δ) =

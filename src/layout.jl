@@ -127,33 +127,97 @@ function _layout(ps::NetworkParameters, offset::Int)
     ParametersLayout(inner), off
 end
 
-function _layout(ps::NamedTuple, offset::Int)
-    children, off = _layout_children(values(ps), offset)
-    NestedLayout(NamedTuple{keys(ps)}(children), (offset + 1):off), off
-end
-
-function _layout(ps::Tuple, offset::Int)
-    children, off = _layout_children(ps, offset)
-    TupleLayout(children, (offset + 1):off), off
-end
-
-function _layout(x, offset::Int)
-    s = freeparameters(x)
-    if s === x
-        n = length(x)
-        LeafLayout((offset + 1):(offset + n), _leafsize(x), x), offset + n
-    else
-        inner, off = _layout(s, offset)
-        WrappedLayout(x, inner), off
+# The two branch cases, each **one** `@generated` body that lays the children out *and* builds the
+# layout around them.
+#
+# Splitting those two steps is what this used to do, and it is the expensive way round. A generated
+# body that returns a `k`-element tuple is cheap on its own — 1.27 s at 369 children — and so is
+# wrapping a tuple you already hold in a `NamedTuple` and a struct — 0.13 s. Composing them across a
+# function call is neither: inference has to carry the whole 369-element tuple type from the callee
+# into the caller's own inference, and `parameterlayout` on that set cost **11.7 s**, of which
+# the child walk alone was 0.49 s of it and the wrapping was the rest. Fused into one body, and with
+# the leaf union below removed, it is **1.36 s**.
+#
+# Measured every way round before settling on this. A `@noinline` barrier on the child walk does not
+# help (11.78 s). Neither does supplying `NestedLayout`'s type parameters instead of letting them be
+# solved. And computing the child lengths first so that the children could be laid out *independently*
+# — the obvious way to break the serial offset dependency — is **worse**, 15.4 s, because it adds two
+# more `k`-long bodies to pay for; the serial dependency was never the cost, as an "every child at the
+# same offset" control shows at 1.17 s against the real walk's 1.27 s.
+#
+# The offset threads left to right, as the recursion this replaces did: the ranges a layout hands out
+# are the order `flatten` writes in.
+@generated function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
+    n = length(Keys)
+    n == 0 && return :((NestedLayout(NamedTuple{$Keys}(()), (offset + 1):offset), offset))
+    body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
+    for i in 2:n
+        push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
+            _layout(getfield(ps, $i), $(Symbol(:off_, i - 1)))))
+    end
+    children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
+    final = Symbol(:off_, n)
+    quote
+        $(body...)
+        NestedLayout(NamedTuple{$Keys}($children), (offset + 1):$final), $final
     end
 end
 
-_layout_children(::Tuple{}, offset::Int) = ((), offset)
+@generated function _layout(ps::Tuple, offset::Int)
+    n = fieldcount(ps)
+    n == 0 && return :((TupleLayout((), (offset + 1):offset), offset))
+    body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
+    for i in 2:n
+        push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
+            _layout(getfield(ps, $i), $(Symbol(:off_, i - 1)))))
+    end
+    children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
+    final = Symbol(:off_, n)
+    quote
+        $(body...)
+        TupleLayout($children, (offset + 1):$final), $final
+    end
+end
 
-function _layout_children(xs::Tuple, offset::Int)
-    child, off = _layout(first(xs), offset)
-    rest, final = _layout_children(Base.tail(xs), off)
-    (child, rest...), final
+# A leaf, terminal or wrapped, decided by **dispatch on the storage's type** rather than by an `if`
+# on `freeparameters(x) === x`.
+#
+# The identity test is the right *question* — it is what `isterminal` asks — and asking it inside one
+# method body was measurably the wrong way to ask it. Inference could not fold the branch, so
+# `_layout` on a plain `Matrix{Float32}` came back as a **three-way union**: a `LeafLayout`, and two
+# shapes of `WrappedLayout`. One union per child is survivable; a branch of 369 children each of a
+# three-way union is not, and it is what made `parameterlayout` cost 11.7 s on the flat parameter set
+# of GMLDatasets' MNIST transformer.
+#
+# Splitting on `::T`/`::T` puts the question to the method table, where it is answered once per leaf
+# type at compile time. Keeping the `===` *inside* the same-type method does not work and was tried:
+# inference cannot prove that two arguments are the same object, so the union came straight back. The
+# identity has to be decided by dispatch or not at all.
+#
+# What that gives up is a leaf whose `freeparameters` returns a *distinct object of its own type*,
+# which this now treats as terminal where the `===` would have wrapped it. Nothing is lost, because
+# such a type never worked: `_layout` would descend into the storage, ask it for *its*
+# `freeparameters`, and recurse without end unless it eventually changed type. A leaf either hands
+# back itself or hands back something else.
+#
+# [`isterminal`](@ref) still asks the identity question, and is still right to — it is a predicate a
+# caller evaluates on a value it holds, not a dispatch this has to infer through.
+@inline _layout(x, offset::Int) = _layout_storage(x, freeparameters(x), offset)
+
+# same type: terminal, the numbers are copied straight out of `x`
+@inline _layout_storage(x::T, ::T, offset::Int) where {T} = _leaf_layout(x, offset)
+
+# different type: the storage is structured, so lay it out and rebuild around it
+@inline _layout_storage(x, s, offset::Int) = _wrapped_layout(x, s, offset)
+
+@inline function _leaf_layout(x, offset::Int)
+    n = length(x)
+    LeafLayout((offset + 1):(offset + n), _leafsize(x), x), offset + n
+end
+
+@inline function _wrapped_layout(x, s, offset::Int)
+    inner, off = _layout(s, offset)
+    WrappedLayout(x, inner), off
 end
 
 _leafsize(x::AbstractArray) = size(x)

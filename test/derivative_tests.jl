@@ -121,10 +121,10 @@ _pullback_allocs(pb, Δ) = @allocated pb(Δ)
 @testset "the pullback does not pay for the depth of the tree" begin
     # the same four leaves, once flat and once one to a layer. The walk is over layouts known at
     # compile time, so the layering cannot show up in the bill. Before it was written this way the two
-    # cost 320 and 1664 bytes on Julia 1.10, and 1088 and 1664 on 1.13, against a 128-byte answer —
-    # the gap is the dynamic dispatch a runtime-`Symbol` lookup into `l.children` forced at every
-    # child. (Both figures now sit at the answer's own cost on 1.10, 1.12 and 1.13; 1.11 adds a fixed
-    # 32 bytes to either, which is why the two are compared with each other and not with `zero`.)
+    # cost 1088 and 1664 bytes on Julia 1.13, against a 128-byte answer — the gap is the dynamic
+    # dispatch a runtime-`Symbol` lookup into `l.children` forced at every child. Both now sit at the
+    # answer's own cost, 128 bytes on 1.11, 1.12 and 1.13; they are still compared with each other
+    # rather than with `zero`, because it is the *depth* that must not show up and not the figure.
     L = [1.0, 2.0]
     function _cost(p)
         w, l = flatten(p)

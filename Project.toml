@@ -1,6 +1,6 @@
 name = "NeuralNetworkParameters"
 uuid = "67f4d93a-60e9-472b-8cdd-1ccf6005724a"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Michael Kraus <michael.kraus@ipp.mpg.de> and contributors"]
 
 [deps]
@@ -22,7 +22,7 @@ SafeTestsets = "0.1"
 Test = "1"
 Zygote = "0.6, 0.7"
 ZygoteRules = "0.2.7"
-julia = "1.10"
+julia = "1.11"
 
 [extras]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"

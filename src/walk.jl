@@ -6,11 +6,44 @@
 # structured types exist — is what keeps `changebackend`, `map_to_cpu`, `_statify`, the elementwise
 # optimizer primitives and the HDF5 traversal from each being their own copy of it.
 #
-# The recursions are written with `Base.tail` rather than with `map` over `keys` so that they stay
-# type stable and allocation free, which `flatten!`/`unflatten!` rely on. The out-of-place `unflatten`
-# and the `unflatten` rrule follow the same rule for the same reason: `map` over a closure cost the
-# first an allocation per leaf on Julia 1.11, and a `for` loop over `keys` cost the second a dynamic
-# dispatch per child on every version. See `_unflatten_children` and `_accumulate_named!`.
+# The walk *down* the tree — `mapparameters` and friends dispatching on `NetworkParameters`,
+# `NamedTuple`, `Tuple` or a leaf — is ordinary multiple dispatch. The walk *across* the children of
+# one branch is not, and it is where the care goes. Neither `map` over `keys` nor a `for` loop will do:
+# `map` over a closure cost the out-of-place `unflatten` an allocation per leaf on Julia 1.11, and a
+# loop over `keys` indexes a heterogeneous tuple at a runtime `i`, which is type-unstable and costs a
+# dynamic dispatch — and a boxed allocation — per child. `flatten!`/`unflatten!` are allocation-free
+# only because neither happens.
+#
+# These across-children walks used to be `@inline`d `Base.tail` chains, which met that bar and
+# introduced a different problem: `Base.tail` produces a *new tuple type at every level*, so a branch
+# with `k` children costs `k` specialisations whose argument types are each `O(k)` long, and inference
+# on that grows as `k³`. Measured, `flatten` on a flat set: 0.17 s at 32 children, 2.2 s at 64, 17.6 s
+# at 128, and past ten minutes at the 369 of the MNIST transformer in GMLDatasets.jl — which is a real
+# parameter set, not a synthetic worst case. Dropping the `@inline` does not help; it makes the same
+# shape slower still (3.2 s at 64) *and* costs 187 808 bytes, because the chain is what kept the
+# per-leaf `copyto!` statically dispatched.
+#
+# So the across-children walks write the flat body out instead: one `@generated` expansion per branch
+# shape, `k` statements reading `getfield(xs, 1) … getfield(xs, k)` at *literal* indices. One
+# specialisation instead of `k`, no new tuple types at all, every index inferred at a constant, and
+# the same straight-line code the chain used to inline down to. They are `_foreach_zip`,
+# `_fold_children` and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and
+# `_unflatten_children!` in `flatten.jl`, the two branch cases of `_layout` in `layout.jl`,
+# `_promote_eltypes` in
+# `leaves.jl`, and `_accumulate_named!` and `_matching_named` on the reverse pass in `derivatives.jl`.
+#
+# A walk that takes *several* sets in lockstep indexes each of them in place too, and that is the same
+# point made about the second argument. Taking `values` of a branch to zip it materialises a temporary
+# tuple per branch per argument, which is free while the branch stays in registers and is not beyond
+# that: `mapparameters!` on a flat 48-child set cost 800 bytes a call that way and 6 144 at 369, and a
+# branch of branches three to four times that. So `_foreach_zip` reads every one of its arguments with
+# `getfield` at a literal index, exactly as `_flatten_children!` reads the layout, and the arity and the
+# keys are checked in the generator where they cost nothing.
+#
+# **Writing a body out is not free, and one walk here does not.** It costs compilation per branch
+# shape, and for a walk that runs once rather than once per iteration that is the wrong trade — see
+# `_map_zip`, which hands branches wider than 32 children back to `Base.map` and says why at length.
+# The distinction to apply is not "wide or narrow" but "in an inner loop or not".
 
 """
     mapparameters(f, ps)
@@ -61,7 +94,7 @@ mapparameters(+, a, c).L1.b
 @inline function mapparameters(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     _check_keys(keys(ps), nts)
-    NamedTuple{keys(ps)}(_map_zip(mapparameters, f, values(ps), map(values, nts)...))
+    _rewrap_children(ps, _map_zip(mapparameters, f, ps, nts...))
 end
 
 @inline mapparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
@@ -101,7 +134,7 @@ mapstorage(x -> x ./ 2, ps).L1.W
 @inline function mapstorage(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     _check_keys(keys(ps), nts)
-    NamedTuple{keys(ps)}(_map_zip(mapstorage, f, values(ps), map(values, nts)...))
+    _rewrap_children(ps, _map_zip(mapstorage, f, ps, nts...))
 end
 
 @inline mapstorage(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
@@ -118,21 +151,27 @@ end
 
 Walk the leaves of `ps` for the side effect of `f`, in lockstep with `rest`. Returns `nothing`.
 
+The children of a keyed branch are paired **by key**, and the keys have to agree — a `rest` whose keys
+are the same set in a different order is an `ArgumentError` and not a silent crossing-over. A `Tuple`
+branch is paired positionally, since the blocks of a multi-block leaf have no keys to agree on.
+
 A branch or leaf of `rest` that is `nothing` **skips** that position entirely — `f` is not called
 there. This is what lets a gradient tree that is missing the entries of a frozen or non-trainable
 layer be walked against the parameters it belongs to, without having to fill the holes in first.
+
+Allocation-free, at any width of branch, any depth of nesting and any number of `rest`: the branches are
+indexed in place rather than taken apart, so nothing is materialised on the way in.
 
 See [`mapparameters!`](@ref) for the in-place variant that returns its destination.
 """
 @inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
-    nt = _as_namedtuple(ps)
-    _foreach_zip(f, freeparameters, values(nt), map(r -> _values_for(r, keys(nt)), rest)...)
+    _foreach_zip(f, freeparameters, _as_namedtuple(ps), map(_as_namedtuple, rest)...)
     nothing
 end
 
 @inline function foreachparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _foreach_zip(f, freeparameters, ps, map(r -> _tuple_for(r, length(ps)), rest)...)
+    _foreach_zip(f, freeparameters, ps, map(_as_tuple, rest)...)
     nothing
 end
 
@@ -148,7 +187,9 @@ end
 Walk `dest` and `srcs` in lockstep, calling `f(dest_leaf, src_leaves...)` for its effect on
 `dest_leaf`, and return `dest`.
 
-As with [`foreachparameters`](@ref), a `nothing` in `srcs` skips that position.
+This is the walk an optimizer runs every iteration, and it allocates nothing at any width or depth. As
+with [`foreachparameters`](@ref), a `nothing` in `srcs` skips that position, and the keys of a keyed
+branch have to agree.
 """
 @inline function mapparameters!(f, dest, srcs::Vararg{Any, N}) where {N}
     foreachparameters(f, dest, srcs...)
@@ -161,7 +202,7 @@ end
 Like [`mapparameters!`](@ref), but `f` is handed the [`freeparameters`](@ref) of each leaf.
 
 No `rebuild` is needed: the storage of a leaf is the leaf's own memory, so writing into it is writing
-into the leaf.
+into the leaf. Allocation-free on the same terms.
 """
 @inline function mapstorage!(f, dest, srcs::Vararg{Any, N}) where {N}
     _foreach_storage(f, dest, srcs...)
@@ -170,13 +211,12 @@ end
 
 @inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
-    nt = _as_namedtuple(ps)
-    _foreach_zip(f, _storage_recurse, values(nt), map(r -> _values_for(r, keys(nt)), rest)...)
+    _foreach_zip(f, _storage_recurse, _as_namedtuple(ps), map(_as_namedtuple, rest)...)
     nothing
 end
 
 @inline function _foreach_storage(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _foreach_zip(f, _storage_recurse, ps, map(r -> _tuple_for(r, length(ps)), rest)...)
+    _foreach_zip(f, _storage_recurse, ps, map(_as_tuple, rest)...)
     nothing
 end
 
@@ -218,17 +258,82 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 """
 @inline foldparameters(op, init, ps::NetworkParameters) = foldparameters(op, init, params(ps))
 
-@inline foldparameters(op, init, ps::Union{NamedTuple, Tuple}) = _fold_children(op, init, values(ps))
+@inline foldparameters(op, init, ps::Union{NamedTuple, Tuple}) = _fold_children(op, init, ps)
 
 @inline foldparameters(op, init, x) = op(init, x)
 
-@inline _fold_children(op, acc, ::Tuple{}) = acc
-@inline _fold_children(op, acc, xs::Tuple) = _fold_children(
-    op, foldparameters(op, acc, first(xs)), Base.tail(xs))
+# A *left* fold, and the expansion keeps it one: `op` is the caller's and need not be associative,
+# so the nesting below is built inside out rather than halved.
+@generated function _fold_children(op, acc, xs)
+    expr = :acc
+    for i in 1:fieldcount(xs)
+        expr = :(foldparameters(op, $expr, getfield(xs, $i)))
+    end
+    expr
+end
 
 # ---------------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------------
+
+# The arity check the `Base.tail` chains used to get for free, by running out of `Tuple{}` methods.
+# Raised from the generated bodies, so it is a clear error at specialisation time rather than a
+# `MethodError` naming a tuple type nobody wrote.
+#
+# **This has to be defined before every generated body that calls it, and that is not a matter of
+# taste.** A `@generated` function's generator runs in the world age of its own method definition, so
+# a helper defined further down the file is invisible to it: the generator raises
+# `MethodError: no method matching _children_arity(…)  The applicable method may be too new`. Loading
+# a precompiled package hides this, because deserialising the cache gives every method in the module
+# one world age -- so it is only seen when the sources are evaluated, which is what
+# `--compiled-modules=no` does and what `test/world_age_tests.jl` pins. `src/flatten.jl`'s two callers
+# are covered by `walk.jl` being included first.
+#
+# The same holds for everything else a generator here reaches: `_check_arity`, `_arity_error`,
+# `_branch_keys`, `_child_keys_error` and `_child_expr` below. All of them sit above `_foreach_zip`,
+# which is the only generated body that calls them, and none may be moved past it.
+#
+# `rest` is the *types* of the further sets, as a tuple, and the recursion below is over that tuple —
+# whose length is the arity of the walk, one or two, never the width of a branch. A `Nothing` among them
+# is a set the caller is skipping and has no children to count. Written as a chain and not a loop
+# because `_map_zip` calls this at run time rather than from a generator, and `enumerate` over a
+# heterogeneous tuple of types costs it an allocation there.
+function _children_arity(xs, rest::Tuple)
+    n = fieldcount(xs)
+    _check_arity(n, rest, 2)
+    n
+end
+
+@inline _check_arity(::Int, ::Tuple{}, ::Int) = nothing
+@inline function _check_arity(n::Int, rest::Tuple, j::Int)
+    r = first(rest)
+    r === Nothing || fieldcount(r) == n || _arity_error(n, j, fieldcount(r))
+    _check_arity(n, Base.tail(rest), j + 1)
+end
+
+@noinline _arity_error(n::Int, j::Int, m::Int) = throw(ArgumentError(string(
+    "parameter sets walked together must have the same number of children at every level; ",
+    "got ", n, " and, in argument ", j, ", ", m, ".")))
+
+# The keys of a branch type, or `nothing` for a branch that has none. A generated body uses it to pair
+# the children of two named branches *by key*, and to say so when they cannot be paired.
+_branch_keys(::Type{<:NamedTuple{Keys}}) where {Keys} = Keys
+_branch_keys(::Type) = nothing
+
+@noinline _child_keys_error(ks, rk, j::Int) = throw(ArgumentError(string(
+    "parameter sets have different keys: ", ks, " and, in argument ", j, ", ", rk)))
+
+# One child of one further set, as an expression: the literal `nothing` for a set being skipped, and
+# `getfield` at a literal index otherwise. Named branches have their keys checked here, in the
+# generator, so the pairing is by key and the check costs nothing at run time — which is the guard
+# `mapparameters` pays `_check_keys` for and the in-place walks used to go without.
+function _child_expr(ks, r::Type, j::Int, i::Int)
+    r === Nothing && return :nothing
+    rk = _branch_keys(r)
+    # `j + 1` and not `j`: the message counts the parameter sets, of which `xs` is the first
+    ks === nothing || rk === nothing || rk === ks || _child_keys_error(ks, rk, j + 1)
+    :(getfield(rest[$j], $i))
+end
 
 @inline _as_namedtuple(x::NetworkParameters) = params(x)
 @inline _as_namedtuple(x::NamedTuple) = x
@@ -237,38 +342,99 @@ foldparameters((n, x) -> n + length(x), 0, ps)
 @inline _as_tuple(x::Tuple) = x
 @inline _as_tuple(x::Nothing) = nothing
 
-@inline _values_for(::Nothing, ks::Tuple) = map(_ -> nothing, ks)
-@inline _values_for(x, ::Tuple) = values(_as_namedtuple(x))
-
-@inline _tuple_for(::Nothing, n::Int) = ntuple(_ -> nothing, n)
-@inline _tuple_for(x, ::Int) = x
-
-@inline _anynothing(::Tuple{}) = false
-@inline _anynothing(t::Tuple) = first(t) === nothing || _anynothing(Base.tail(t))
-
-@inline _map_zip(recurse, f, ::Tuple{}) = ()
-@inline _map_zip(recurse, f, xs::Tuple) = (
-    recurse(f, first(xs)), _map_zip(recurse, f, Base.tail(xs))...)
-@inline _map_zip(recurse, f, ::Tuple{}, rest::Tuple{}...) = ()
-@inline _map_zip(recurse, f, xs::Tuple, rest::Tuple...) = (
-    recurse(f, first(xs), map(first, rest)...),
-    _map_zip(recurse, f, Base.tail(xs), map(Base.tail, rest)...)...)
-
-@inline _foreach_zip(f, kind, ::Tuple{}) = nothing
-@inline function _foreach_zip(f, kind, xs::Tuple)
-    _foreach_step(f, kind, first(xs))
-    _foreach_zip(f, kind, Base.tail(xs))
+# `||` and not `any`, so it still short-circuits: the whole point is not to look at the rest once a
+# `nothing` has been found.
+@generated function _anynothing(t::Tuple)
+    fieldcount(t) == 0 && return :(false)
+    tests = [:(getfield(t, $i) === nothing) for i in 1:fieldcount(t)]
+    foldr((a, b) -> :($a || $b), tests)
 end
-@inline _foreach_zip(f, kind, ::Tuple{}, rest::Tuple{}...) = nothing
-@inline function _foreach_zip(f, kind, xs::Tuple, rest::Tuple...)
-    _foreach_step(f, kind, first(xs), map(first, rest)...)
-    _foreach_zip(f, kind, Base.tail(xs), map(Base.tail, rest)...)
+
+# The out-of-place walk, and **the one walk here that hands wide branches back to `Base.map`.**
+#
+# Every other across-children walk in this package is written out at every width, and this one is not,
+# because what they need and what it needs are different things. `_flatten_children!`,
+# `_unflatten_children!` and `_foreach_zip` run once per optimizer *iteration* or more, and
+# `_unflatten_children` runs once per objective evaluation through the closure a `Gradient` is built
+# from; for those, type stability and zero allocation are the property the package exists to provide,
+# and they are worth any amount of compilation. `_map_zip` is what `mapparameters` and `mapstorage`
+# are, and a consumer calls those once per cache, once per `changebackend`, once per `map_to_cpu` —
+# not per iteration.
+#
+# The cost of writing it out is real and it is paid per (function, branch shape) pair. Measured cold on
+# a flat 369-entry set, Julia 1.11.9: `map(zero, ps)` compiles in 0.01 s and a written-out
+# `mapparameters(zero, ps)` in 1.51 s. `GeometricOptimizers` reaches six such primitives while building
+# one `OptimizerCache`, which took that from 1.57 s to **71.16 s** on the parameter set of GMLDatasets'
+# MNIST transformer — a shape a consumer really has.
+#
+# `Base.map` has no such cliff because past 32 fields it drops to the `Any32` loop, and that fallback
+# is exactly what it costs: inference gives up on the result, and it allocates about 30 % more than the
+# written-out body (19 824 bytes against 15 424 at 128 children). For a walk that runs once, that buys
+# one dynamic dispatch at the call site — the *object* it returns is concretely typed either way, so
+# everything downstream of it specialises normally. For a walk in an inner loop it would buy one per
+# call, which is why the split is here and not everywhere.
+#
+# So: written out to 32 children, `map` beyond. 32 and not another number because it is the width
+# `Base` itself unrolls a tuple to, so below the threshold nothing is given up and above it nothing is
+# gained. A network's layer is far below it; the flat set that made D12 a defect is far above.
+#
+# (The closure `map` is handed here used to be the objection to it, and is no longer. `map` over a
+# closure was reported not to be elided on Julia 1.10, which is why the walks in this package became
+# `Base.tail` chains in the first place. On 1.11, 1.12 and 1.13 alike a closure costs nothing against a
+# plain function — 6240 bytes against 6224 at 40 children, 19 824 against 19 808 at 128 — so that
+# reason expired with the 1.10 floor.)
+const _WRITE_OUT_MAX_CHILDREN = 32
+
+# The branch is on `fieldcount` of a *type*, so it folds to a constant and only one arm is compiled.
+# It is here rather than inside the `@generated` body below because a generated function may not emit
+# a closure — "The function body AST defined by this @generated function is not pure" — and the `map`
+# arm needs one.
+@inline function _map_zip(recurse, f, xs, rest::Vararg{Any, N}) where {N}
+    # A skipped set is the `foreach` family's affair: there is nothing for an out-of-place walk to put
+    # in the hole, so the answer is an error and not a guess. `_children_arity` lets a `Nothing` past,
+    # because to `_foreach_zip` it means "call nothing here".
+    _anynothing(rest) && _no_skipped_set_error()
+    _children_arity(typeof(xs), map(typeof, rest))
+    if fieldcount(typeof(xs)) > _WRITE_OUT_MAX_CHILDREN
+        map((cs...) -> recurse(f, cs...), xs, rest...)
+    else
+        _map_zip_written(recurse, f, xs, rest...)
+    end
+end
+
+@noinline _no_skipped_set_error() = throw(ArgumentError(string(
+    "`mapparameters` and `mapstorage` build a new set and so have nothing to put where a `nothing` ",
+    "stands; use `mapparameters!`, `mapstorage!` or `foreachparameters`, which skip that position.")))
+
+@generated function _map_zip_written(recurse, f, xs, rest...)
+    n = fieldcount(xs)
+    calls = [Expr(:call, :recurse, :f, :(getfield(xs, $i)),
+                  (:(getfield(rest[$j], $i)) for j in 1:length(rest))...) for i in 1:n]
+    :(($(calls...),))
+end
+
+@generated function _foreach_zip(f, kind, xs, rest...)
+    n = _children_arity(xs, rest)
+    ks = _branch_keys(xs)
+    calls = [Expr(:call, :_foreach_step, :f, :kind, :(getfield(xs, $i)),
+                  (_child_expr(ks, rest[j], j, i) for j in 1:length(rest))...) for i in 1:n]
+    quote
+        $(calls...)
+        nothing
+    end
 end
 
 @inline _foreach_step(f, ::typeof(freeparameters), args::Vararg{
     Any, N}) where {N} = foreachparameters(f, args...)
 @inline _foreach_step(f, ::typeof(_storage_recurse), args::Vararg{
     Any, N}) where {N} = _foreach_storage(f, args...)
+
+# `_map_zip`'s two arms return the children in different shapes: the written-out body a `Tuple`, which
+# has to be keyed, and `Base.map` over a `NamedTuple` a `NamedTuple` that is keyed already. Selecting
+# all `k` fields of the second out of itself is a second `k`-wide generated body and a copy for nothing
+# — 6 272 bytes of the 57 120 a `mapparameters` costs at 369 children.
+@inline _rewrap_children(::NamedTuple{Keys}, children::NamedTuple{Keys}) where {Keys} = children
+@inline _rewrap_children(::NamedTuple{Keys}, children) where {Keys} = NamedTuple{Keys}(children)
 
 @inline _check_keys(::Tuple, ::Tuple{}) = nothing
 @inline function _check_keys(ks::Tuple, nts::Tuple)
