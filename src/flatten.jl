@@ -157,10 +157,17 @@ unflatten(layout, [10.0, 20.0, 30.0]).L1.W
 Each leaf is *copied* out of `v` rather than viewed into it, so the leaves are ordinary arrays and
 cannot alias each other or the flat vector.
 """
-@inline unflatten(l::ParametersLayout, v::AbstractVector) = NetworkParameters(unflatten(l.inner, v))
-@inline unflatten(l::NestedLayout, v::AbstractVector) =
-    NamedTuple{keys(l.children)}(_unflatten_children(l.children, v))
-@inline unflatten(l::TupleLayout, v::AbstractVector) = _unflatten_children(l.children, v)
+# The three branch cases are the same walk whether the flat form is a vector or a Jacobian — they
+# recurse and put the children back in the shape of the branch, and neither step reads an entry. So
+# they are written once over `AbstractVecOrMat`, and only the two leaf cases below are split: a leaf
+# takes its own stretch of a vector and is rebuilt, and takes the corresponding *rows* of a Jacobian
+# and is not.
+@inline unflatten(l::ParametersLayout, data::AbstractVecOrMat) = NetworkParameters(
+    unflatten(l.inner, data))
+@inline unflatten(l::NestedLayout, data::AbstractVecOrMat) =
+    NamedTuple{keys(l.children)}(_unflatten_children(l.children, data))
+@inline unflatten(l::TupleLayout, data::AbstractVecOrMat) = _unflatten_children(l.children, data)
+
 @inline unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
 @inline unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
 
@@ -176,10 +183,6 @@ flat vector, so that the block belonging to each parameter can be read off.
 Each leaf becomes the ``n_\mathrm{leaf} \times \mathrm{size}(J, 2)`` row block it occupies. The leaves
 are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing to rebuild it into.
 """
-@inline unflatten(l::ParametersLayout, J::AbstractMatrix) = NetworkParameters(unflatten(l.inner, J))
-@inline unflatten(l::NestedLayout, J::AbstractMatrix) =
-    NamedTuple{keys(l.children)}(_unflatten_children(l.children, J))
-@inline unflatten(l::TupleLayout, J::AbstractMatrix) = _unflatten_children(l.children, J)
 @inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
 @inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
 

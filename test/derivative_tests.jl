@@ -105,6 +105,44 @@ end
     @test g.a == [1.0, 1.0]
 end
 
+@testset "a set the reverse pass never touched comes back as `nothing`" begin
+    # The extension rewraps the pullback's `NamedTuple`, and when the reverse pass touched none of the
+    # parameters there is no `NamedTuple` to rewrap: one `nothing` stands for the whole set and cannot
+    # be spread over `keys(ps)`. It used to raise `MethodError: no method matching _values(::Nothing)`
+    # here, where the bare `NamedTuple` the set wraps returns `nothing` quite happily — so a loss that
+    # reads only the layout, or a frozen sub-network, failed on the wrapper and not on its contents.
+    @test Zygote.gradient(p -> 1.0, ps) === (nothing,)
+    @test Zygote.gradient(p -> Float64(length(flatten(p)[2])), ps) === (nothing,)
+    @test Zygote.gradient(p -> 1.0, params(ps)) === (nothing,)      # what it has to agree with
+    # a set that *was* touched still comes back wrapped, holes and all
+    @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
+end
+
+@testset "a layer called `params` is a layer like any other" begin
+    # The reverse pass runs against `NamedTuple{keys(ps)}`, so its tangent is keyed by the layers —
+    # and a set of one layer named `params` has a tangent shaped exactly like the *structural* one a
+    # tangent for the wrapper would be. Told apart by shape rather than by the set's own keys, it was
+    # unwrapped a level too far and the layer's shape was lost, with nothing raised to say so.
+    qs = NetworkParameters((params = (W = [1.0, 2.0],),))
+    @test Zygote.gradient(p -> sum(p.params.W), qs)[1] ==
+          NetworkParameters((params = (W = [1.0, 1.0],),))
+    # and the structural shape still goes back in, for a set whose keys it cannot be
+    ext = Base.get_extension(NeuralNetworkParameters, :ZygoteRulesExt)
+    @test ext._rewrap(ps, (params = (L1 = (W = ones(2, 2), b = ones(2)),
+        L2 = (W = ones(1, 2), b = ones(1))),)) isa NetworkParameters
+    @test_throws ArgumentError ext._rewrap(ps, (nope = 1,))
+end
+
+@testset "`nothing` is a structural zero for the `flatten` rules too" begin
+    # `_normalized` is explicit that `nothing` means "no derivative"; the `flatten` pullback took
+    # `ZeroTangent` and not `nothing`, so the two spellings disagreed on the one path Zygote does not
+    # take — a caller invoking the rule directly got a `MethodError` instead of a zero.
+    (_, _), pb1 = ChainRulesCore.rrule(flatten, ps)
+    @test pb1(nothing) == (ChainRulesCore.NoTangent(), ChainRulesCore.ZeroTangent())
+    (_, _), pb2 = ChainRulesCore.rrule(flatten, Float64, ps)
+    @test pb2(nothing)[3] == ChainRulesCore.ZeroTangent()
+end
+
 @testset "a structural zero contributes nothing to the promotion" begin
     @test NeuralNetworkParameters.parameter_eltype(ChainRulesCore.ZeroTangent()) === Union{}
     @test NeuralNetworkParameters.parameter_eltype((a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
@@ -136,6 +174,41 @@ _pullback_allocs(pb, Δ) = @allocated pb(Δ)
     flat = NetworkParameters((a = L, b = L, c = L, d = L))
     layered = NetworkParameters((L1 = (a = L,), L2 = (b = L,), L3 = (c = L,), L4 = (d = L,)))
     @test _cost(layered) == _cost(flat)
+end
+
+# One structured leaf beside a plain one, its cotangent given over the leaf's own fields: what the
+# pullback costs and what it reads.
+function _structured_leaf_pullback(leaf, Δleaf)
+    sp = NetworkParameters((L1 = (W = leaf, b = [1.0, 2.0]),))
+    sv, sl = flatten(sp)
+    _, spb = ChainRulesCore.rrule(unflatten, sl, sv)
+    Δs = ChainRulesCore.Tangent{Any}(params = ChainRulesCore.Tangent{Any}(
+        L1 = ChainRulesCore.Tangent{Any}(W = Δleaf, b = [1.0, 1.0])))
+    _pullback_allocs(spb, Δs)                          # warm up the call and the measurement
+    _pullback_allocs(spb, Δs), spb(Δs)[3]
+end
+
+@testset "the pullback does not pay for the fields a structured leaf carries" begin
+    # `_storage_component` asks which of the prototype's fields `freeparameters` handed back and reads
+    # the cotangent's component for it, in one generated body. Asked with a `for` over
+    # `fieldnames(typeof(prototype))` instead, `getfield` at a runtime `Symbol` comes back as the union
+    # of the type's field types, so the comparison was dispatched dynamically once per field — and the
+    # reverse pass paid for every field the leaf carried rather than for the one holding its numbers.
+    #
+    # `Sym` keeps its three numbers in the first of two fields and `Padded` the same three in the last
+    # of six. They are compared with each other and not with a figure, for the reason the depth test
+    # above is: it is the *field count* that must not show up, and `@allocated` jitters on Windows. As
+    # a loop these cost 160 and 512 bytes on Julia 1.13; both now sit at 96.
+    cost_sym, read_sym = _structured_leaf_pullback(sample_sym(),
+        ChainRulesCore.Tangent{Any}(S = ones(3), n = ChainRulesCore.NoTangent()))
+    cost_padded, read_padded = _structured_leaf_pullback(sample_padded(),
+        ChainRulesCore.Tangent{Any}(a = ChainRulesCore.NoTangent(), b = ChainRulesCore.NoTangent(),
+            c = ChainRulesCore.NoTangent(), d = ChainRulesCore.NoTangent(),
+            e = ChainRulesCore.NoTangent(), S = ones(3)))
+    @test cost_padded == cost_sym
+    # and both still read the right numbers into the right places
+    @test read_sym == ones(5)
+    @test read_padded == ones(5)
 end
 
 @testset "a tuple branch reads a cotangent shorter than itself" begin

@@ -40,6 +40,30 @@ end
     @test :L1 in propertynames(fp)
 end
 
+@testset "both spellings of reading a layer infer the same" begin
+    # `getindex` and `getproperty` have the same body, and only `getproperty` was `@inline`d. Without
+    # it the literal `:L1` is not propagated into `_child_layout`, so the child layout comes back as
+    # the union of every layer's and `unflatten` is dispatched dynamically — `fp[:L1]` inferred a
+    # `Union` where `fp.L1` inferred the one concrete layer.
+    # Asked through a closure holding the literal and not with `@inferred`, which infers the call as
+    # `getindex(::FlatParameters, ::Symbol)` and so throws the constant away before the question is
+    # put — the property it has to pin is the one a written-out `fp[:L1]` gets.
+    @test fp[:L1] == fp.L1
+    @test isconcretetype(only(Base.return_types(p -> p[:L1], Tuple{typeof(fp)})))
+    @test isconcretetype(only(Base.return_types(p -> p.L1, Tuple{typeof(fp)})))
+end
+
+@testset "a layout unflattened against a flat set gives ordinary leaves" begin
+    # `fp[l.range]` at full length goes through `similar`, which keeps the layout, so a single-leaf
+    # set came back as a leaf reshaped from a `FlatParameters` rather than the plain array
+    # `unflatten` promises
+    one = NetworkParameters((L1 = (W = [1.0 2.0],),))
+    ofp = FlatParameters(one)
+    @test unflatten(flatlayout(ofp), ofp).L1.W isa Matrix{Float64}
+    @test unflatten(flatlayout(ofp), ofp) == one
+    @test unflatten(flatlayout(fp), fp) == ps
+end
+
 @testset "similar keeps the layout" begin
     @test flatlayout(similar(fp)) == flatlayout(fp)
     @test similar(fp) isa FlatParameters

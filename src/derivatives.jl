@@ -39,6 +39,12 @@ end
 
 # `flatten` returns a tuple, so its cotangent is a tangent *for the tuple*; only the first component,
 # the one for the flat vector, carries anything.
+#
+# `nothing` is a structural zero here as it is everywhere else in this file — the convention
+# `_normalized` states. Zygote converts one to a `ZeroTangent` before it reaches an `rrule`, so this
+# method is for a caller that invokes the rule directly; without it the two spellings of "no
+# derivative" disagree, and only the one Zygote does not use raises.
+_flat_cotangent(::Nothing) = nothing
 _flat_cotangent(Δ::ChainRulesCore.AbstractZero) = nothing
 _flat_cotangent(Δ::Tuple) = _normalized(first(Δ))
 _flat_cotangent(Δ::ChainRulesCore.Tangent) = _normalized(first(ChainRulesCore.backing(Δ)))
@@ -178,17 +184,42 @@ function _storage_from_backing(prototype, nt::NamedTuple)
     # Single-block storage against a tangent over the struct's fields: `(S = ..., n = ZeroTangent())`
     # for a leaf whose storage is its `S`. Which field that is follows from the prototype — the object
     # `freeparameters` returned is one of its fields — so the cotangent is narrowed to that component.
-    f = _storage_field(prototype, s)
-    f === nothing ? nt : _cotangent_get(nt, f)
+    _storage_component(prototype, s, nt)
 end
 
 _storage_from_backing(_, Δ) = Δ
 
-function _storage_field(prototype, storage)
-    for f in fieldnames(typeof(prototype))
-        getfield(prototype, f) === storage && return f
+# Which field of the prototype the storage is, and the component of the cotangent that belongs to it,
+# decided in one generated body — written out for the reason `_accumulate_named!` above is, and this
+# is the same walk's tail.
+#
+# A `for` over `fieldnames(typeof(prototype))` indexes the struct at a *runtime* `Symbol`, so
+# `getfield` comes back as the union of the type's field types and the comparison is dispatched
+# dynamically once per field: the reverse pass pays for every field the leaf carries, and not only for
+# the one that holds its numbers. Handing back the field's *name* is not enough to stop that, because
+# the name is then a runtime `Symbol` in `_cotangent_get` and its `haskey` is a runtime question —
+# which is the point `_matching_named` below makes about keys. Splicing the whole selection keeps both
+# constant on every arm.
+#
+# `@allocated` on the pullback with the call warmed, one process per reading, Julia 1.13.0-rc3 on an
+# Apple M4 Max, for the same three numbers of storage behind one field of metadata and behind five:
+#
+# | | storage 1 of 2 fields | storage 6 of 6 |
+# |---|---|---|
+# | a `for` over the field names | 160 B | 512 B |
+# | the name spliced in | 128 B | 128 B |
+# | the selection spliced in | 96 B | 96 B |
+#
+# It is the second column that says what was wrong, not the first: what the loop cost was the number
+# of fields. `test/derivative_tests.jl` asserts the two columns are equal rather than pinning either,
+# since the figure is the whole pullback's and `@allocated` jitters on Windows.
+@generated function _storage_component(prototype, storage, nt)
+    expr = :nt
+    for f in reverse(fieldnames(prototype))
+        expr = :(getfield(prototype, $(QuoteNode(f))) === storage ?
+                 _cotangent_get(nt, $(QuoteNode(f))) : $expr)
     end
-    nothing
+    expr
 end
 
 # `freeparameters` of the prototype tells us which of the tangent's fields are the storage. Neither

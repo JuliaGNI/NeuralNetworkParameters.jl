@@ -81,7 +81,7 @@ end
 # same-length result; anything else is an ordinary array, since a layout that does not match its data
 # is worse than none.
 function Base.similar(fp::FlatParameters, ::Type{S}, dims::Dims) where {S}
-    dims == size(parent(fp)) ? FlatParameters(similar(parent(fp), S), flatlayout(fp)) :
+    dims == size(parent(fp)) ? FlatParameters(similar(parent(fp), S, dims), flatlayout(fp)) :
     similar(parent(fp), S, dims)
 end
 
@@ -97,7 +97,11 @@ end
 
 Base.propertynames(fp::FlatParameters) = (:data, :layout, _child_keys(flatlayout(fp))...)
 
-function Base.getindex(fp::FlatParameters, s::Symbol)
+# `@inline` for the reason `getproperty` above is: the two spellings read a layer off the same way and
+# have to infer the same way. Without it the literal `:L1` of `fp[:L1]` is not propagated into
+# `_child_layout`, the child layout comes back as the union of every layer's, and `unflatten` is
+# dispatched dynamically — where `fp.L1` infers the one concrete layer.
+@inline function Base.getindex(fp::FlatParameters, s::Symbol)
     unflatten(_child_layout(flatlayout(fp), s), parent(fp))
 end
 
@@ -142,6 +146,16 @@ end
 The structured form of `fp`, using the layout it carries.
 """
 unflatten(fp::FlatParameters) = unflatten(flatlayout(fp), parent(fp))
+
+# A leaf read *out of* a flat parameter set takes its numbers from the vector `fp` wraps. Left to the
+# generic path it would take `fp[l.range]`, and at full length — a set of one leaf — `similar` hands
+# that back as a `FlatParameters` still carrying the layout, so the leaf would come back as a reshaped
+# parameter set rather than the ordinary array `unflatten` promises.
+#
+# On the leaf and not on `ParameterLayout`: the branch cases only pass `data` down, so the leaf is
+# both where the read happens and the one place a method is not ambiguous with them — `ParameterLayout`
+# against `FlatParameters` is more specific in its second argument and less in its first.
+@inline unflatten(l::LeafLayout, fp::FlatParameters) = _reshape_leaf(parent(fp)[l.range], l.size)
 
 flatten!(fp::FlatParameters, ps) = (flatten!(parent(fp), ps, flatlayout(fp)); fp)
 unflatten!(ps, fp::FlatParameters) = unflatten!(ps, flatlayout(fp), parent(fp))

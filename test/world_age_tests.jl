@@ -2,11 +2,12 @@
 #
 # Every across-children walk is a `@generated` function, and four of them call `_children_arity` from
 # the *generator* body — as does, for a walk over more than one set, the chain of `_branch_keys`,
-# `_child_expr` and their two error helpers. A generator runs in the world age of its own method
-# definition, so a helper defined further down the file is invisible to it and the generator raises
-# `MethodError: no method matching _children_arity(…)  The applicable method may be too new`. That is
-# a real defect and it was one: `_children_arity` used to sit at the foot of `src/walk.jl`, below
-# `_map_zip` and `_foreach_zip`.
+# `_child_expr` and their two error helpers. `_layout`'s two branch cases reach `_layout_body`, which
+# builds the body both of them share, on the same terms. A generator runs in the world age of its own
+# method definition, so a helper defined further down the file is invisible to it and the generator
+# raises `MethodError: no method matching _children_arity(…)  The applicable method may be too new`.
+# That is a real defect and it was one: `_children_arity` used to sit at the foot of `src/walk.jl`,
+# below `_map_zip` and `_foreach_zip`.
 #
 # It cannot be caught in-process. Loading a precompiled package deserialises every method in the
 # module into one world age, which is exactly the condition that hides it — so the whole of the rest
@@ -56,8 +57,8 @@ let n = Ref(0)
     n[] == 0 || exit(9)
 end
 
-# `_flatten_children!`, `_unflatten_children`, `_unflatten_children!`, `_layout`,
-# `_promote_eltypes`
+# `_flatten_children!`, `_unflatten_children`, `_unflatten_children!`, `_layout` and the
+# `_layout_body` its generators share, `_promote_eltypes`
 v, layout = flatten(ps)
 v == [1.0, 2.0, 3.0, 4.0] || exit(4)
 unflatten(layout, v) == ps || exit(5)
@@ -65,6 +66,9 @@ let qs = mapparameters(zero, ps)
     unflatten!(qs, layout, v)
     qs == ps || exit(6)
 end
+
+# and `_layout_body`'s empty-branch arm, which is the one `wrap` call the walk above does not make
+flatten((L1 = NamedTuple(), L2 = (W = [1.0],), L3 = (t = (),)))[1] == [1.0] || exit(15)
 
 # `_fold_zip` at arity one, and at the arity that reaches `_branch_keys` and `_child_expr` from the
 # fold's own generator; `foldstorage` is its other `_fold_step`
