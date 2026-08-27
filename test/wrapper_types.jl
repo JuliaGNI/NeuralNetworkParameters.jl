@@ -39,6 +39,26 @@ NNP.freeparameters(g::TwoBlock) = (A = g.A, B = g.B)
 NNP.rebuild(g::TwoBlock, data) = TwoBlock(data.A, data.B, g.N)
 NNP.parameter_metadata(g::TwoBlock) = (N = g.N,)
 
+# `Padded` stands in for no downstream type. It keeps the same three numbers as `Sym` behind *five*
+# fields of metadata rather than one, and it is here so that the reverse pass can be asked whether
+# finding the storage among a leaf's fields costs anything per field — a question a single field count
+# cannot answer.
+struct Padded{T} <: AbstractVector{T}
+    a::Int
+    b::Int
+    c::Int
+    d::Int
+    e::Int
+    S::Vector{T}
+end
+
+Base.size(x::Padded) = size(x.S)
+Base.getindex(x::Padded, i::Int) = x.S[i]
+
+NNP.freeparameters(x::Padded) = x.S
+NNP.rebuild(x::Padded, data) = Padded(x.a, x.b, x.c, x.d, x.e, data)
+NNP.parameter_metadata(x::Padded) = (a = x.a, b = x.b, c = x.c, d = x.d, e = x.e)
+
 struct Manifold{T, AT <: AbstractMatrix{T}} <: AbstractMatrix{T}
     A::AT
 end
@@ -53,6 +73,9 @@ NNP.rebuild(::Manifold, data) = Manifold(data)
 "A three-number symmetric matrix and the five-number two-block lift built on it."
 sample_sym() = Sym([1.0, 2.0, 3.0], 2)
 sample_twoblock() = TwoBlock(Sym([4.0, 5.0, 6.0], 2), [7.0 8.0], 3)
+
+"The same three numbers as `sample_sym`, behind five fields of metadata rather than one."
+sample_padded() = Padded(1, 2, 3, 4, 5, [1.0, 2.0, 3.0])
 
 "A four-number matrix that is its own storage."
 sample_manifold() = Manifold([1.0 2.0; 3.0 4.0])

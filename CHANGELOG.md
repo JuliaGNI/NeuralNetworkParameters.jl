@@ -24,6 +24,17 @@ up is below.
   sub-network is the shape a consumer meets it in. The hole now passes straight out, which is what
   Zygote gives for the unwrapped parameters. A set that *was* touched is unchanged, holes and all.
 
+- **A layer called `params` had its gradient unwrapped a level too far.** The reverse pass runs
+  against `NamedTuple{keys(ps)}`, so what it hands back is keyed by the *layers* — and for a set of
+  one layer named `params` that tangent is shaped exactly like the structural one a tangent for the
+  wrapper would be. `ZygoteRulesExt` told the two apart by shape, so it unwrapped the real layer and
+  gave `NetworkParameters((params = [1.0, 1.0],))` where the gradient is
+  `NetworkParameters((params = (W = [1.0, 1.0],),))`: the layer's own shape lost, silently, with
+  nothing raised to say so. A layer may be called `params` — `getproperty` reaches into the wrapped
+  `NamedTuple`, so the field itself is read with `params(ps)` and the name is free — so the set's own
+  keys are asked about first now, and a tangent that is neither those keys nor a hole is named in an
+  `ArgumentError` instead of being spread over `keys(ps)`.
+
 - **A branch with no parameters could not be written to HDF5.** `_save_keyed` built its key attribute
   with `[String(k) for k in keys(nt)]`, whose element type over an empty branch is solved as
   `Union{}` — and HDF5 refuses a `Vector{Union{}}` attribute with a `TypeError` naming neither the
@@ -53,12 +64,33 @@ up is below.
 
 ### Changed
 
-- **`_storage_field` is written out**, for the reason `_accumulate_named!` above it is: a `for` over
-  `fieldnames(typeof(prototype))` indexes the struct at a *runtime* `Symbol`, so `getfield` comes back
-  as the union of the type's field types and the comparison is dispatched dynamically once per field.
-  Measured on a leaf whose storage is one of two fields, reverse pass warmed, fresh process per
-  reading, Julia 1.13.0-rc3 on an Apple M4 Max: **176 B a call as a loop, 144 B written out.** Pinned
-  as a bound, since the figure is the whole pullback's and not this walk's.
+- **Finding a structured leaf's storage no longer costs a leaf its fields.** `_storage_from_backing`
+  asks which of the prototype's fields `freeparameters` handed back and reads the cotangent's
+  component for it. Asked with a `for` over `fieldnames(typeof(prototype))`, that indexes the struct
+  at a *runtime* `Symbol`: `getfield` comes back as the union of the type's field types and the
+  comparison is dispatched dynamically once per field, so the reverse pass paid for every field the
+  leaf carried and not only for the one holding its numbers. Handing back the field's *name* does not
+  stop it either, since the name is then a runtime `Symbol` and `_cotangent_get`'s `haskey` a runtime
+  question — the point `_matching_named` makes about keys. `_storage_component` splices the whole
+  selection, which keeps both constant on every arm.
+
+  `@allocated` on the pullback with the call warmed, one process per reading, Julia 1.13.0-rc3 on an
+  Apple M4 Max, for the same three numbers of storage behind one field of metadata and behind five:
+
+  | | storage 1 of 2 fields | storage 6 of 6 |
+  |---|---|---|
+  | a `for` over the field names | 160 B | 512 B |
+  | the name spliced in | 128 B | 128 B |
+  | the selection spliced in | **96 B** | **96 B** |
+
+  The second column is what was wrong: the cost was the *number of fields*. So
+  `test/derivative_tests.jl` asserts the two columns are equal rather than pinning either — the figure
+  is the whole pullback's and not this walk's, and `@allocated` jitters on Windows.
+
+- **`similar(fp, S, dims)` builds its result with the `dims` it was given.** The two spellings agree
+  for the `Vector` a flat parameter set is built on, since `dims` is only kept when it equals
+  `size(parent(fp))`; the three-argument one is the one those dimensions were checked against, and it
+  is 1-based to match the ranges the layout hands out.
 
 - **The three branch cases of `unflatten` are written once**, over `AbstractVecOrMat` rather than once
   for a vector and again for a Jacobian. They recurse and put the children back in the shape of the

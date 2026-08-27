@@ -118,6 +118,21 @@ end
     @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
 end
 
+@testset "a layer called `params` is a layer like any other" begin
+    # The reverse pass runs against `NamedTuple{keys(ps)}`, so its tangent is keyed by the layers —
+    # and a set of one layer named `params` has a tangent shaped exactly like the *structural* one a
+    # tangent for the wrapper would be. Told apart by shape rather than by the set's own keys, it was
+    # unwrapped a level too far and the layer's shape was lost, with nothing raised to say so.
+    qs = NetworkParameters((params = (W = [1.0, 2.0],),))
+    @test Zygote.gradient(p -> sum(p.params.W), qs)[1] ==
+          NetworkParameters((params = (W = [1.0, 1.0],),))
+    # and the structural shape still goes back in, for a set whose keys it cannot be
+    ext = Base.get_extension(NeuralNetworkParameters, :ZygoteRulesExt)
+    @test ext._rewrap(ps, (params = (L1 = (W = ones(2, 2), b = ones(2)),
+        L2 = (W = ones(1, 2), b = ones(1))),)) isa NetworkParameters
+    @test_throws ArgumentError ext._rewrap(ps, (nope = 1,))
+end
+
 @testset "`nothing` is a structural zero for the `flatten` rules too" begin
     # `_normalized` is explicit that `nothing` means "no derivative"; the `flatten` pullback took
     # `ZeroTangent` and not `nothing`, so the two spellings disagreed on the one path Zygote does not
@@ -161,26 +176,39 @@ _pullback_allocs(pb, Δ) = @allocated pb(Δ)
     @test _cost(layered) == _cost(flat)
 end
 
-@testset "the pullback does not pay to find a structured leaf's storage" begin
-    # `_storage_field` asks which of the prototype's fields `freeparameters` handed back, and used to
-    # ask it with a `for` over `fieldnames(typeof(prototype))`: `getfield` at a runtime `Symbol` comes
-    # back as the union of the type's field types, so the comparison was dispatched dynamically once
-    # per field. Written out, the names are literals and every one of them is constant. Measured on
-    # `Sym`, whose storage is one of two fields: 176 bytes a call as a loop, 144 written out.
-    #
-    # Bounded rather than equated, on both counts: the figure is the whole pullback's and not this
-    # walk's, and `@allocated` jitters on Windows.
-    sp = NetworkParameters((L1 = (W = sample_sym(), b = [1.0, 2.0]),))
+# One structured leaf beside a plain one, its cotangent given over the leaf's own fields: what the
+# pullback costs and what it reads.
+function _structured_leaf_pullback(leaf, Δleaf)
+    sp = NetworkParameters((L1 = (W = leaf, b = [1.0, 2.0]),))
     sv, sl = flatten(sp)
     _, spb = ChainRulesCore.rrule(unflatten, sl, sv)
     Δs = ChainRulesCore.Tangent{Any}(params = ChainRulesCore.Tangent{Any}(
-        L1 = ChainRulesCore.Tangent{Any}(
-            W = ChainRulesCore.Tangent{Any}(S = [1.0, 1.0, 1.0], n = ChainRulesCore.NoTangent()),
-            b = [1.0, 1.0])))
+        L1 = ChainRulesCore.Tangent{Any}(W = Δleaf, b = [1.0, 1.0])))
     _pullback_allocs(spb, Δs)                          # warm up the call and the measurement
-    @test _pullback_allocs(spb, Δs) ≤ 160
-    # and it still reads the right numbers into the right places
-    @test spb(Δs)[3] == ones(5)
+    _pullback_allocs(spb, Δs), spb(Δs)[3]
+end
+
+@testset "the pullback does not pay for the fields a structured leaf carries" begin
+    # `_storage_component` asks which of the prototype's fields `freeparameters` handed back and reads
+    # the cotangent's component for it, in one generated body. Asked with a `for` over
+    # `fieldnames(typeof(prototype))` instead, `getfield` at a runtime `Symbol` comes back as the union
+    # of the type's field types, so the comparison was dispatched dynamically once per field — and the
+    # reverse pass paid for every field the leaf carried rather than for the one holding its numbers.
+    #
+    # `Sym` keeps its three numbers in the first of two fields and `Padded` the same three in the last
+    # of six. They are compared with each other and not with a figure, for the reason the depth test
+    # above is: it is the *field count* that must not show up, and `@allocated` jitters on Windows. As
+    # a loop these cost 160 and 512 bytes on Julia 1.13; both now sit at 96.
+    cost_sym, read_sym = _structured_leaf_pullback(sample_sym(),
+        ChainRulesCore.Tangent{Any}(S = ones(3), n = ChainRulesCore.NoTangent()))
+    cost_padded, read_padded = _structured_leaf_pullback(sample_padded(),
+        ChainRulesCore.Tangent{Any}(a = ChainRulesCore.NoTangent(), b = ChainRulesCore.NoTangent(),
+            c = ChainRulesCore.NoTangent(), d = ChainRulesCore.NoTangent(),
+            e = ChainRulesCore.NoTangent(), S = ones(3)))
+    @test cost_padded == cost_sym
+    # and both still read the right numbers into the right places
+    @test read_sym == ones(5)
+    @test read_padded == ones(5)
 end
 
 @testset "a tuple branch reads a cotangent shorter than itself" begin
