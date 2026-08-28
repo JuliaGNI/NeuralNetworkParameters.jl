@@ -27,7 +27,7 @@ using NeuralNetworkParameters
 
 const T = Float32
 
-# `time()` and `invokelatest`, not `@elapsed` and a direct call, and that is the measurement rather
+# `time_ns()` and `invokelatest`, not `@elapsed` and a direct call, and that is the measurement rather
 # than a detail: compiling this function would otherwise infer through the call in its body, so the
 # cost would be spent before the clock starts and every row would read 0.00 s. `wide_branch_cost.jl`
 # read exactly that on Julia 1.13 until it was written this way.
@@ -35,12 +35,17 @@ const T = Float32
 # The **value** comes back with the time for the same reason. The caller wants the layout's type as
 # well as the clock, and reaching for it with a second, direct `parameterlayout(ps)` would put an
 # inferable call to the timed function in the caller's own body — where its cost is paid while the
-# caller compiles, before `t = time()` ever runs. That the union `ps` infers to happens to be too
+# caller compiles, before `t = time_ns()` ever runs. That the union `ps` infers to happens to be too
 # wide for Julia to split is not a guard; handing the value back is.
+#
+# `time_ns()` and not `time()`, which is the wall clock and steps when the system adjusts it. On one
+# row of the sweep behind the 0.2.5 entry that produced a reported **-1.4 s** where two re-runs read
+# 0.53; a negative first-call time is at least obvious, and a small positive step in the other
+# direction is not. `time_ns()` is monotonic, so a row is the elapsed time or it is nothing.
 function first_call(f, args...)
-    t = time()
+    t = time_ns()
     x = Base.invokelatest(f, args...)
-    round(time() - t; digits = 2), x
+    round((time_ns() - t) / 1e9; digits = 2), x
 end
 
 # All leaves the same tiny matrix: this measures the shape a layout is held in, not the size of the

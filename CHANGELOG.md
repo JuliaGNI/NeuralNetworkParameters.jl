@@ -4,6 +4,24 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The two measurement harnesses timed on the wall clock.** `first_call` in
+  `scripts/wide_branch_cost.jl` and `scripts/leaf_layout_cost.jl` used `time()`, which steps when the
+  system adjusts it. The sweep that verified this release across Julia 1.11, 1.12 and 1.13 produced a
+  reported **-1.4 s** for one row of `leaf_layout_cost.jl` where two re-runs read 0.53. Both now use
+  `time_ns()`, which is monotonic.
+
+  A negative first-call time is at least obvious. A step of the same size in the other direction is
+  not, and would have been indistinguishable from a genuine 1.4 s regression — on a harness whose
+  whole purpose is to make a compile-time cliff visible. `GeometricOptimizers` 0.6.1 makes the same
+  change to the three harnesses it keeps.
+
+  This is the fourth rule in `PLAN.md` §6 that cost a wrong figure to learn, and it is recorded there
+  beside the other three.
+
 ## [0.2.5] — 2026-08-27
 
 Issue [#22] — a promotion that allocated on a wide branch — and the audit that followed it, for
