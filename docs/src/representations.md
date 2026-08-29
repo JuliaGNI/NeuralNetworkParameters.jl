@@ -9,8 +9,17 @@ CurrentModule = NeuralNetworkParameters
 ```@docs
 NetworkParameters
 params
-ParameterSet
 ```
+
+A whole set of parameters is a `NetworkParameters` and nothing else. A *branch* of one — a layer — is
+the plain `NamedTuple` it wraps, and that is a different question, answered by
+[`isparametertree`](@ref): it is what the walks recurse into, and its domain also admits a `Tuple`,
+which is what [`freeparameters`](@ref) returns for a multi-block leaf.
+
+There is deliberately no alias unioning the two. One would be a method on `Base.NamedTuple` wherever
+it were used — a type nobody owns, colliding with every other `NamedTuple` alias in the same method
+table — and it would say the same thing about a whole set and about a branch. Where a function
+genuinely takes both, it has a method for each.
 
 `NetworkParameters{T}` wraps a `NamedTuple` and forwards `getproperty`, `getindex`, `keys`, `values`,
 `length`, `iterate` and `pairs` to it, so it reads like the `NamedTuple` it holds. `NamedTuple(ps)`

@@ -30,7 +30,7 @@ module NeuralNetworkParameters
 
 using ChainRulesCore
 
-export NetworkParameters, params, ParameterSet
+export NetworkParameters, params
 
 include("parameters.jl")
 

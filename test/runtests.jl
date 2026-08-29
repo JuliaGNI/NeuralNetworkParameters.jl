@@ -30,3 +30,6 @@ end
 @safetestset "HDF5                      " begin
     include("hdf5_tests.jl")
 end
+@safetestset "GeometricBase             " begin
+    include("geometric_base_tests.jl")
+end

@@ -1,22 +1,25 @@
 name = "NeuralNetworkParameters"
 uuid = "67f4d93a-60e9-472b-8cdd-1ccf6005724a"
-version = "0.2.5"
+version = "0.3.0"
 authors = ["Michael Kraus <michael.kraus@ipp.mpg.de> and contributors"]
 
 [deps]
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 
 [weakdeps]
+GeometricBase = "9a0b12b7-583b-4f04-aa1f-d8551b6addc9"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 ZygoteRules = "700de1a5-db45-46bc-99cf-38207098b444"
 
 [extensions]
+GeometricBaseExt = "GeometricBase"
 HDF5Ext = "HDF5"
 ZygoteRulesExt = "ZygoteRules"
 
 [compat]
 ChainRulesCore = "1"
 ForwardDiff = "0.10, 1"
+GeometricBase = "0.14.9"
 HDF5 = "0.17"
 SafeTestsets = "0.1"
 Test = "1"
@@ -26,6 +29,7 @@ julia = "1.11"
 
 [extras]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+GeometricBase = "9a0b12b7-583b-4f04-aa1f-d8551b6addc9"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 SafeTestsets = "1bc83da4-3b8d-516f-aca4-4fe02f6d838f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
@@ -33,4 +37,4 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 ZygoteRules = "700de1a5-db45-46bc-99cf-38207098b444"
 
 [targets]
-test = ["Test", "SafeTestsets", "HDF5", "ForwardDiff", "Zygote", "ZygoteRules"]
+test = ["Test", "SafeTestsets", "HDF5", "ForwardDiff", "GeometricBase", "Zygote", "ZygoteRules"]

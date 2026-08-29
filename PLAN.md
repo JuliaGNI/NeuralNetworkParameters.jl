@@ -31,27 +31,35 @@ The implementation is performance-oriented; §6 says how that is measured here.
 
 ## Where the ecosystem stands
 
-Every package below has its wave of the migration merged; nothing is waiting on a branch.
+**Five of the nine are on a branch ahead of `main`.** Three revisions of this file said "every package
+has its wave merged; nothing is waiting on a branch", and that was never checked — §7's first trap,
+which is why the last column is now `git branch --show-current` and a commit count rather than a
+claim. Taken from the working trees:
 
-| package | version | branch |
-|---|---|---|
-| `NeuralNetworkParameters` | 0.2.5 | `main` |
-| `GeometricBase` | 0.14.10 | `main` |
-| `SimpleSolvers` | 0.13.2 | `main` |
-| `AbstractNeuralNetworks` | 0.7.3 | `main` |
-| `SymbolicNeuralNetworks` | 0.7.1 | `main` — untracked `GMLPLAN.md`, kept on purpose, see §4.2 |
-| `GeometricOptimizers` | 0.6.1 | `main` |
-| `GeometricMachineLearning` | 0.6.1 | `main` |
-| `NonlinearIntegrators` | 0.4.2 | `main` |
-| `GMLDatasets` | 0.1.0 | `keep-the-mnist-weights-out-of-the-generated-docs` |
+| package | version | branch | ahead of `main` |
+|---|---|---|---|
+| `NeuralNetworkParameters` | 0.3.0 | `plan-for-the-de-piracy-wave` | 2 |
+| `GeometricBase` | 0.14.9 | `neuralnetworkparameters-extension` — identical to `main`; PR #16 closed | 0 |
+| `SimpleSolvers` | 0.13.2 | `neuralnetworkparameters-extension` | 3 |
+| `AbstractNeuralNetworks` | 0.8.0 | `rename-arraynamedtuple` | 1 |
+| `SymbolicNeuralNetworks` | 0.8.0 | `main` — untracked `GMLPLAN.md`, kept on purpose, see §4.2 | 0 |
+| `GeometricOptimizers` | 0.7.0 | `close-the-type-piracy` | 7 |
+| `GeometricMachineLearning` | 0.6.1 | `main` | 0 |
+| `NonlinearIntegrators` | 0.4.2 | `main` | 0 |
+| `GMLDatasets` | 0.1.0 | `keep-the-mnist-weights-out-of-the-generated-docs` | 1 |
 
-**`GeometricBase` 0.14.10, `SimpleSolvers` 0.13.2 and `GeometricOptimizers` 0.6.1 have to be
-registered in that order**, because the third requires the first two by version: the methods it used
-to pirate are only in those releases. See §4.1 for what that costs downstream.
+`GeometricMachineLearning` reads 0.6.1 because 0.6.1 is itself unreleased — its changelog carries it as
+`[Unreleased] — 0.6.1`, so §4.3.1's work is folded into that entry rather than opening a new one.
 
-**Julia 1.11 is the floor across all of these except `GeometricBase`**, which keeps 1.10 and can:
-its new extension only loads beside a package that already requires 1.11, and a 1.10 caller who does
-not load `NeuralNetworkParameters` never sees it. Every workaround the move retired was a *1.10*
+**`NeuralNetworkParameters` 0.3.0, `AbstractNeuralNetworks` 0.8.0, `SymbolicNeuralNetworks` 0.8.0,
+`SimpleSolvers` 0.13.2 and `GeometricOptimizers` 0.7.0 have to be registered in dependency order**,
+because the second requires the first by version: three of the methods it used to pirate are only in
+that release. `GeometricBase` is **not** in the chain — 0.14.9 is registered and unchanged, and the
+0.14.10 that used to be in this list held nothing but the extension that is now `ext/
+GeometricBaseExt.jl` here. See §4.1 for what the remaining chain costs downstream.
+
+**Julia 1.11 is the floor across all of these except `GeometricBase`**, which keeps 1.10 and is
+unaffected: nothing there names this package. Every workaround the move retired was a *1.10*
 workaround, in three places: `SimpleSolvers`' `HAS_PREALLOCATED_GETRF`, whose fallback allocated the
 pivot vector on every factorization in the default linear solver; `SymbolicNeuralNetworks`'
 `Base.tail` walk in `unflatten_batch`; and a set of 1.10-only allocation ceilings in `SNN` and
@@ -84,14 +92,22 @@ a second dependency to the main package has to argue against this line.**
 | `src/io.jl` | the `h5save`/`h5load`/`save`/`load` generics and the type registry |
 | `src/derivatives.jl` | `ChainRulesCore` rules for both conversions |
 | `ext/HDF5Ext.jl`, `ext/ZygoteRulesExt.jl` | the storage methods; `pullback` on a `NetworkParameters` |
+| `ext/GeometricBaseExt.jl` | `L2norm`, from which the generic `l2norm(x) = sqrt(L2norm(x))` follows |
 
-Two packages now carry a method on this package's types, and both are extensions on a weak
-dependency, so neither costs anything to a caller who does not load this one:
+**Where a method between two packages goes is decided by which one can test it**, not by which owns
+the generic — ownership admits both, since a method is piracy only when the function *and* every
+dispatched argument type belong elsewhere. `L2norm` over a parameter set is therefore here:
+`GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so an extension there was
+one nobody could exercise, and its assertion had to sit in `GeometricOptimizers`, two packages from
+the definition. It also depends on the leaf protocol and `foldparameters`, which are this package's to
+change. `test/geometric_base_tests.jl` covers it.
+
+One package still carries a method on this package's types, as an extension on a weak dependency, so
+it costs nothing to a caller who does not load this one:
 
 | package | file | methods |
 |---|---|---|
-| `GeometricBase` 0.14.10 | `GB/ext/NeuralNetworkParametersExt.jl` | `L2norm(::ParameterSet)`, from which the generic `l2norm(x) = sqrt(L2norm(x))` follows |
-| `SimpleSolvers` 0.13.2 | `SS/ext/SimpleSolversNeuralNetworkParametersExt.jl` | `GradientAutodiff(F, ::ParameterSet)`, `GradientFunction(F, ∇F!, ::ParameterSet)`, `alloc_h(::ParameterSet)` |
+| `SimpleSolvers` 0.13.2 | `SS/ext/SimpleSolversNeuralNetworkParametersExt.jl` | `GradientAutodiff(F, ps)`, `GradientFunction(F, ∇F!, ps)`, `alloc_h(ps)` |
 
 ## 2. Why the package is needed
 
@@ -117,15 +133,20 @@ because **a guarantee holds where it is asserted and nowhere else** — the allo
 was fixed on the two walks the tests measured, then found again on three that were not measured, and
 again on a tenth that had no column in the sweep.
 
-- **`ParameterSet` is the dispatch type; `NetworkParameters` is the container.** `ParameterSet` is
-  keyed only, and deliberately not `isparametertree`'s domain, which also admits a `Tuple`: a
-  `Tuple` is a branch the walks recurse into, but never a set of parameters handed in whole.
-  `test/parameters_tests.jl` asserts exactly that difference rather than the happy path.
-- **`ParameterSet` bounds neither element type nor depth.** That is the whole difference from
-  `GeometricOptimizers.ParameterContainer{T}`, and both have to exist: across GO's alias `T` means a
-  flatness-and-uniformity guarantee for its `NamedTuple` member and a promotion over leaves at any
-  depth for the container, so it is the right type exactly where `T` also appears elsewhere in the
-  signature and the wrong type everywhere else.
+- **`NetworkParameters` is the type of a whole set of parameters, and the only one.** A *branch* of
+  one is a plain `NamedTuple` and is a different question, answered by `isparametertree` — whose domain
+  also admits a `Tuple`, because a `Tuple` is a branch the walks recurse into but never a set handed in
+  whole. `test/parameters_tests.jl` asserts both, separately, which is the shape of the distinction.
+- **`NetworkParameters{T}` bounds neither the leaves' element type nor the depth**: its `T` is a
+  *promotion* over the leaves. A caller wanting "flat, and every leaf an `AbstractArray{T}`" should not
+  spell it as a `NamedTuple` bound: an alias for `Base.NamedTuple` is a type nobody owns, so a method
+  on it is a method on `Base.NamedTuple` and collides with every other such alias in the same method
+  table. That is what `GeometricOptimizers` removed in 0.7.0.
+- **Where two shapes genuinely reach one function, it has two methods** — not one signature over a
+  union alias. An alias admits everything of that shape everywhere it is used; a method says which
+  caller it is for. There are eight such pairs across the ecosystem and each carries its reason;
+  §4.3.1 lists them. The two shapes that recur are a *branch* of a set, and the bare `NamedTuple` a
+  **reverse pass** produces, which is why `applychain` has one.
 - **The leaf protocol is the entire extension surface.** `freeparameters(x)` gives the
   differentiable storage; `rebuild(prototype, data)` puts a leaf back. `freeparameters` may return
   an array, a scalar, or a `Tuple`/`NamedTuple` for a multi-block type, and the recursion continues
@@ -171,8 +192,9 @@ again on a tenth that had no column in the sweep.
   removed `NeuralNetworkParameters` outright rather than aliasing it, and
   `ANN/test/parameters_seam_tests.jl` pins that the name is not even defined. 0.7.3 applied the same
   rule the other way and renamed its own `ArrayNamedTuple` — network inputs and outputs — to
-  `NamedTupleOfArrays`, since `GeometricOptimizers.ArrayNamedTuple` is a set of *parameters* and the
-  two shared a name by coincidence.
+  `NamedTupleOfArrays`, which says what the alias is about: a network's inputs and outputs. A set of
+  *parameters* is a `NetworkParameters` and not an alias of any kind, so `NamedTupleOfArrays` is the
+  only alias of that shape in the ecosystem. One name, one thing.
 
 ## 4. Open work
 
@@ -180,7 +202,7 @@ again on a tenth that had no column in the sweep.
 
 **This is the one thing blocking the ecosystem, and it is outside all nine checkouts.**
 `GeometricIntegratorsBase` 0.6.3 declares `SimpleSolvers = "0.12.1 - 0.12"`, and
-`GeometricIntegrators` 0.17 inherits it. `GeometricOptimizers` 0.6.1 requires `SimpleSolvers` 0.13.2,
+`GeometricIntegrators` 0.17 inherits it. `GeometricOptimizers` 0.7.0 requires `SimpleSolvers` 0.13.2,
 because that is where three of the five upstreamed methods live. So:
 
 | consumer | held at | by |
@@ -196,14 +218,21 @@ dependencies are unaffected; only its test environment blocks, and only through 
 one in `GeometricIntegrators`.** Nothing in this repository or its siblings can do it. Until then:
 
 - `GML/test/reduced_system.jl` is the one test file that needs `GeometricIntegrators`. With it set
-  aside, `GeometricMachineLearning`'s suite passes in full against `GeometricOptimizers` 0.6.1 —
+  aside, `GeometricMachineLearning`'s suite passes in full against `GeometricOptimizers` 0.7.0 —
   every optimizer test, every structured-parameter test, the HDF5 round trips and the docstring
   examples. That is how this wave was verified.
 - `NonlinearIntegrators` cannot be tested against it at all, and does not need to be: nothing there
-  reaches any of the eight methods. Its `ShallowNet` flattens to a plain `Vector` before `Optimizer`
-  sees it, and `GradientAutodiff(F, ::NamedTuple)` — the one upstreamed method it does name, in a
-  comment — is the same function with the same signature, reached through the same
-  `GeometricOptimizers` export.
+  reaches any of the eight methods. Its `ShallowNet` and `DenseNet` both call
+  `NeuralNetworkParameters.flatten` and hand `Optimizer`, `OptimizerState` and `solve!` a plain
+  `Vector` (`NLI/src/nvi/shallownet.jl:114-131`, `NLI/src/nvi/densenet.jl:277-283`, `:351-362`), so
+  §4.3.1's narrowing does not reach it either — the `AbstractVector` member of `OptimizerSolution` is
+  untouched. `GradientAutodiff(F, ::NamedTuple)` — the one upstreamed method it does name, in a
+  comment — is named as the thing it *avoids*.
+
+  Its `Project.toml` still says `GeometricOptimizers = "0.6"`, and that will have to become
+  `"0.6, 0.7"` when §4.1 unblocks. It is deliberately **not** widened now: the change is justified by
+  inspection and cannot be justified by a run, because the environment does not resolve, and an
+  untested compat entry is the kind of status claim §7 is about.
 
 ### 4.2 Goal 3 — duplication
 
@@ -227,67 +256,97 @@ environment does not resolve. Note that its premise has moved on: the blocker it
 
 ### 4.3 Housekeeping
 
-- **`GeometricOptimizers` has 139 method ambiguities**, which is what turning `Aqua` on turned up
-  and what keeps `GO/test/aqua_tests.jl` at `test_piracies` rather than `test_all`. **35 of them have
-  both methods owned by that package**, which is the tractable half; the rest are between its
-  structured matrices (`SymmetricMatrix`, `SkewSymMatrix`, the triangulars, `StiefelProjection`) and
-  `LinearAlgebra`/`ArrayLayouts` methods on `AbstractMatrix` — `mul!`, `vcat`, `hcat`. None was
-  introduced by the de-piracy work.
+- **`GeometricOptimizers` has 129 method ambiguities**, which is what keeps `GO/test/aqua_tests.jl`
+  at `test_piracies` rather than `test_all`. **26 of them have both methods owned by that package**,
+  and one of those is in the `copyto!` family. All 26 are between that package's structured matrices
+  (`SymmetricMatrix`, `SkewSymMatrix`, the triangulars, `StiefelProjection`) and
+  `LinearAlgebra`/`ArrayLayouts` methods on `AbstractMatrix` — `*`, `+`, `mul!`, `vcat`, `hcat`. None
+  came from the de-piracy work. Re-measure with
+  `Test.detect_ambiguities(GeometricOptimizers; recursive = true)` rather than trusting these figures;
+  the 0.7.0 changelog holds the reading they came from.
 
-  Four of the owned ones were **reachable**, all in `_copyto!`, and 0.6.1 closes them; see that
-  changelog. The lesson for the rest is that the report is not a work list — a reported pair may
-  intersect only at a shape nothing can build. The way to triage one is
-  `typeintersect` on the two signatures, then an attempt to construct a witness:
-  three pairs in the `_copyto!` family survive triage as unreachable and are documented in place
-  rather than closed.
+  **The report is not a work list.** A reported pair may intersect only at a shape nothing can build,
+  so the way to triage one is `typeintersect` on the two signatures and then an attempt to construct a
+  witness. The one surviving `copyto!` pair is documented in place on exactly that basis. Prefer
+  removing the *cause* to documenting the pair and prefer documenting it to adding a disambiguator: a
+  method that exists only to satisfy a static checker is one somebody later has to reason about.
 
 - **`GeometricBase`'s extension is asserted in `GeometricOptimizers`, not in `GeometricBase`.** Its
   test environment would have to resolve `NeuralNetworkParameters`, whose floor is Julia 1.11, while
   `GeometricBase` still supports 1.10 and tests on it. `GO/test/aqua_tests.jl` carries the
   `which`-assertion instead, where both are hard dependencies. If `GeometricBase` ever moves to 1.11
   the assertion should move with it — that is the only reason to.
-- **`GeometricOptimizers` 0.6.1 changes what `gradient(opt)` returns** for a parameter set: a
+- **`GeometricOptimizers` 0.6.1 changed what `gradient(opt)` returns** for a parameter set: a
   `RiemannianGradient` wrapping the `GradientAutodiff` rather than the `GradientAutodiff` itself. A
   downstream `isa` check on the inner type has to reach through `.gradient`. `GML` does not do this —
   it builds its own `_GMLGradient` and calls `GeometricOptimizers.update!` directly, never going
   through `Optimizer` — but it is the one visible behaviour change in the release.
 
-### 4.3.1 Should `GeometricOptimizers.ArrayNamedTuple` exist?
+### 4.3.1 The parameter type, and what is left of it
 
-Measured rather than argued, because it decides §4.1's wider question — `ParameterSet` was introduced
-as a step towards cleaner dispatch, not as an end state, and its `NamedTuple` half is what keeps it
-wide.
+**There is one type for a whole set of parameters and it is `NetworkParameters`.** `ParameterSet` is
+removed; `GeometricOptimizers`' `ArrayNamedTuple` and `ParameterContainer` are removed. Nothing in this
+package is a `Union` alias any more. The measurements and the before/after counts live in each
+package's changelog, which is where a record belongs.
 
-**It is the cause of all four reachable ambiguities above.** With
-`ParameterContainer{T} = NetworkParameters{T}` and the four disambiguations deleted, the owned
-ambiguity count falls from **35 to 26** and the `_copyto!` family from **11 to 1** — the section
-methods stop overlapping because `(::NetworkParameters, ::GlobalSectionNamedTuple)` is then strictly
-more specific than `(::NetworkParameters, ::NamedTuple)`, and the mixed-parameter pairs stop existing
-because the shape does. So the disambiguations are a patch on the alias, not on the design.
+An earlier revision of this section concluded the opposite — that `ParameterSet` had to stay wide
+because `SymbolicNeuralNetworks` dispatched equation sets on it. That was true and was not the binding
+constraint. Narrowing it and running the four suites put **48 of 51** failures on one method,
+`AbstractNeuralNetworks`' `applychain`, and `SNN` behind it. The rule this cost: **when a shared name
+has several consumers, the one that is hardest to argue about is not necessarily the one holding it
+up. Narrow it and read the failures.**
 
-**The cost of removing it is 13 of `GO`'s 37 test files**, which fail on `Optimizer`,
-`OptimizerCache`, `GradientState`, `AdamState` and `_zero` — every entry point that takes a solution.
-That is `GO`'s own public commitment that a bare `NamedTuple` is a parameter set, and
-`GO/test/named_tuple_parameters.jl` exists to pin it.
+What the narrowing turned up, none of which was visible from the signatures:
 
-**What that commitment is actually worth downstream, measured:**
+- **The reverse pass is why a bare `NamedTuple` reaches a network at all.**
+  `ext/ZygoteRulesExt.jl` seeds the pullback with the *wrapped* `NamedTuple` rather than the container,
+  because that is what yields a tangent keyed by the layers instead of a tangent for the wrapper's one
+  field. So a function differentiated with respect to a parameter set is *called* with a `NamedTuple`.
+  That is why `applychain` keeps a `NamedTuple` method and why the losses take `ps` untyped.
 
-| consumer | what it hands `GO` | could it hand a `NetworkParameters`? |
-|---|---|---|
-| `GML` | one **layer** `NamedTuple` per layer, to `OptimizerCache`/`update!` (`GML/src/optimizers/optimizer.jl:70-91`, `:293`) | not by wrapping — `GML`'s own note at `:60-69` says the end state is one cache for the *whole* network, which needs `_GMLGradient` to take a `NetworkParameters` and `_tree_optim_step!` to go. That changes behaviour (one `GlobalSection` tree and one `Q` across every layer) and is its own release. |
-| `GMLDatasets` | a **flat 369-key** whole set (`scripts/geometric_optimizers/mnist.jl:127`, `mnist_metal_short.jl:275`) | yes, by wrapping: `NetworkParameters` forwards `keys`, `values`, `ps[:sym]`, `ps.field` and `flatlength`, so `regroup`, `F` and `∇F!` need no change. These are scripts, not library code. |
+  Making the wrap differentiable instead — so that `f` always sees a container — was tried and
+  reverted. It collides with a set whose sole layer is named `params`: there the container tangent and
+  the structural tangent are indistinguishable by shape, and the unwrap and `_rewrap` would have to
+  resolve the ambiguity in opposite directions. `test/derivative_tests.jl` pins that case, and it is
+  the reason the seam stays where it is.
 
-Note that **neither reaches `l2norm`**: `GML`'s per-layer path never builds an `OptimizerStatus` (0
-hits over 15 `optimization_step!` calls across `Adam`, `MomentumMethod` and `GradientMethod`), and
-`GMLDatasets`' loop drives `solver_step!` rather than `solve!`, which is the same (0 hits). Earlier
-revisions of this file cited both as the reason the `NamedTuple` half had to stay for `l2norm`. They
-are the reason it has to stay for the *elementwise primitives*, which is a different claim.
+- **A flat set is one cache's worth, not a tree.** `GeometricMachineLearning` asked "is this a
+  container?" before "is this one cache's worth?", which was invisible while a flat set arrived bare.
+  Wrapped, it descended and gave every weight its own cache — and a bare `Manifold` then reached
+  `_GMLGradient`, ambiguous against `GeometricOptimizers`' own `Gradient` functor. The branch order is
+  reversed and `_is_layer` accepts either carrier.
 
-**So the order is:** convert `GMLDatasets`' two scripts (cheap, no library impact) → decide whether
-`GO` drops the `ArrayNamedTuple` half of `ParameterContainer`, which is a breaking `GO` release and
-the real gate → then `ParameterSet` can narrow in this package, and the ~35 `::ParameterSet`
-signatures across `GO`, `ANN`, `GML`, `SNN` and the two extensions follow. `GML`'s
-`_tree_optim_step!` removal is orthogonal to all of it.
+- **`SymbolicNeuralNetworks` has `EquationSet` back**, and it is the right outcome rather than a
+  regression. An equation set is a keyed bundle of symbolic expressions a caller writes; a parameter
+  set is what a network is evaluated at. The consolidation that removed the name merged two concepts on
+  the strength of a shared shape. Where both genuinely arrive — a symbolic *gradient* is
+  parameter-shaped and holds expressions — there are two methods sharing a body.
+
+**What replaced the union, generally.** Where two shapes genuinely reach one function, it now has two
+methods, each naming its own shape, rather than one signature over an alias. That is more lines and
+less reach: an alias silently admits everything of that shape everywhere it is used, where a method
+says which caller it is for. The remaining pairs are `applychain`, `changebackend`, `_is_decayable`,
+`_get_contents`, `flatten_equations`, `flatten_gradient`, `build_nn_function` and
+`symbolic_parameter_gradient` — eight, each with a comment giving its reason.
+
+**Union aliases left in the ecosystem**, none of them about parameters:
+
+| package | aliases |
+|---|---|
+| `NeuralNetworkParameters` | none |
+| `AbstractNeuralNetworks` | `ArrayOrNamedTuple`, `NeuralNetworkBackend` |
+| `SymbolicNeuralNetworks` | `SymbolicExpression`, `SymbolicVariables` |
+| `GeometricOptimizers` | `OptimizerSolution`, `GradientStorage`, `LiftOrParameters`, `DottableSet`, `GlobalSectionSingleOrNamedTuple`, `VectorStorageMatrix`, `AdamFamily`, `FirstOrderMethodWithState` |
+| `GeometricMachineLearning` | `QPTOAT`, `SymplecticDimensionChange` |
+
+**The next simplification of this kind.** The section aliases — `GlobalSectionTuple`,
+`GlobalSectionNamedTuple`, `GlobalSectionSingleOrNamedTuple` — are the remaining `NamedTuple` aliases
+in `GeometricOptimizers`, and they are what its three `_copyto!` methods on a bare `NamedTuple` exist
+for. Collapsing them means making `GlobalSection(::NetworkParameters)` return a *container* of sections
+rather than the plain tree it returns today, which needs a `parameter_eltype` for a `GlobalSection`
+here and changes what `GML`'s `_tree_optim_step!` descends into — `_is_section_tree` is where that
+would land. Nothing is blocked on it.
+
 ### 4.4 Performance verification across Julia 1.11, 1.12 and 1.13
 
 **Done for 0.2.5, on 2026-08-28.** A/B of `NeuralNetworkParameters` 0.2.4 against 0.2.5 with

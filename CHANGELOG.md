@@ -22,6 +22,54 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   This is the fourth rule in `PLAN.md` §6 that cost a wrong figure to learn, and it is recorded there
   beside the other three.
 
+## [0.3.0]
+
+**`ParameterSet` is removed.** A whole set of parameters is a `NetworkParameters`, and that is the
+only answer. The alias was `Union{NetworkParameters, NamedTuple}`, which meant a method written on it
+was a method on `Base.NamedTuple` — the same property that made `GeometricOptimizers`' own parameter
+aliases type piracy — and it gave one name to two different questions:
+
+- **a whole set**, which is what an optimizer, a loss or a `changebackend` takes, and
+- **a branch of one**, which is what a recursion meets on the way down and is a plain `NamedTuple`.
+
+Those are now asked separately. Where a method genuinely takes both it has two methods, each naming
+its own shape; where it takes a branch, `isparametertree` is the predicate for that question and
+always was.
+
+### Migrating
+
+`ps::ParameterSet` becomes `ps::NetworkParameters`, and a caller holding a bare `NamedTuple` wraps it —
+`NetworkParameters(ps)` shares the leaf arrays rather than copying them. Two consumers needed more than
+a rename, and both are recorded in their own changelogs:
+
+- `SymbolicNeuralNetworks` gets **`EquationSet`** back. It was using this alias for sets of symbolic
+  *expressions* a caller writes by hand, which share the shape of a parameter set and are not one. The
+  consolidation that removed `EquationSet` had merged two concepts on the strength of a shared shape.
+- `AbstractNeuralNetworks`' `applychain` keeps a `NamedTuple` method, and the reason is worth stating
+  because it is not user convenience: `ext/ZygoteRulesExt.jl` seeds the reverse pass with the *wrapped*
+  `NamedTuple` rather than the container, because that is what yields a tangent keyed by the layers
+  rather than a tangent for the wrapper's one field. So a function differentiated with respect to a
+  parameter set is *called* with a `NamedTuple`. Making the wrap differentiable instead was tried and
+  reverted: it collides with a set whose sole layer is named `params`, where the container tangent and
+  the structural tangent are indistinguishable by shape and `_rewrap` and its inverse would have to
+  resolve the ambiguity in opposite directions. `test/derivative_tests.jl` pins that case.
+
+### Added
+
+- **`ext/GeometricBaseExt.jl`**, holding `L2norm` over a parameter set, from which the generic
+  `l2norm(x) = sqrt(L2norm(x))` follows. It comes from `GeometricBase`, which cannot test it:
+  `GeometricBase` supports Julia 1.10 and this package requires 1.11, so a test environment there
+  cannot resolve this package, and the assertion had been parked in `GeometricOptimizers` — two
+  packages from the definition. Ownership does not decide the question, since a method is piracy only
+  when the function *and* every dispatched argument type belong elsewhere; testability does, and the
+  method's correctness rests on the leaf protocol and `foldparameters`, which are this package's.
+  `test/geometric_base_tests.jl` covers it, including that the fold calls each leaf's *own* `l2norm`.
+
+  `GeometricBase` is a weak dependency and its own sole dependency is `Unicode`, so this costs nothing
+  to a caller who does not load it. It also takes `GeometricBase` out of the ecosystem's registration
+  chain: the 0.14.10 that existed only to carry this extension is withdrawn, and 0.14.9 is registered
+  and unchanged.
+
 ## [0.2.5] — 2026-08-27
 
 Issue [#22] — a promotion that allocated on a wide branch — and the audit that followed it, for

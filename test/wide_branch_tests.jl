@@ -310,11 +310,10 @@ end
     @test _construct_allocs(ps) == 0
 end
 
-@testset "a wide branch is a ParameterSet and a parameter tree" begin
+@testset "a wide branch is a parameter tree, and wraps into a set" begin
     ps = wide_set(369)
-    @test ps isa ParameterSet
     @test isparametertree(ps)
-    @test NetworkParameters(ps) isa ParameterSet
+    @test NetworkParameters(ps) isa NetworkParameters
     @test parameter_eltype(ps) == Float32
 end
 

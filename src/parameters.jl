@@ -136,56 +136,6 @@ the short name.
 """
 params(p::NetworkParameters) = getfield(p, :params)
 
-"""
-    ParameterSet
-
-Either of the two forms a whole set of parameters arrives in: a [`NetworkParameters`](@ref), or the
-bare `NamedTuple` it wraps.
-
-This is the type to dispatch on when a method takes *the parameters* and does not care which of the
-two it was handed — a loss, a `changebackend`, a walk, an optimizer entry point. Every package in
-this ecosystem was spelling the union out inline, and `SymbolicNeuralNetworks` had named it
-`EquationSet` for the equation sets that share the shape; one name means a reader meets the same
-type everywhere.
-
-!!! note "Not the same question as `isparametertree`"
-    [`isparametertree`](@ref) is true for a `Tuple` as well, because a `Tuple` *is* a branch the
-    walks recurse into — it is what [`freeparameters`](@ref) returns for a multi-block leaf such as a
-    horizontal lift, and why [`TupleLayout`](@ref) exists. It is never a set of parameters handed in
-    whole, which is always keyed. So `x isa ParameterSet` and `isparametertree(x)` disagree on
-    exactly the `Tuple`s, and each is right for its own question.
-
-Note also what this does *not* say. It puts no bound on the element type and none on the depth: a
-`ParameterSet` may nest to any depth and its leaves need not share a type. A caller that needs "flat,
-and every leaf an `AbstractArray{T}`" wants a narrower type of its own —
-`GeometricOptimizers.ParameterContainer{T}` is one — and cannot get it from here.
-
-# Examples
-
-```jldoctest
-using NeuralNetworkParameters
-
-nt = (L1 = (W = [1.0 2.0], b = [3.0]),)
-(nt isa ParameterSet, NetworkParameters(nt) isa ParameterSet, nt.L1 isa ParameterSet)
-
-# output
-
-(true, true, true)
-```
-
-A leaf is not one, and neither is the `Tuple` a multi-block leaf is made of:
-
-```jldoctest
-using NeuralNetworkParameters
-
-([1.0, 2.0] isa ParameterSet, ([1.0], [2.0]) isa ParameterSet)
-
-# output
-
-(false, false)
-```
-"""
-const ParameterSet = Union{NetworkParameters, NamedTuple}
 
 # The `<:Any` is the element type, which comes first so that `NetworkParameters{T}` binds `T` in a
 # method signature — what `GeometricOptimizers` needs of a parameter set to take it as a solution.

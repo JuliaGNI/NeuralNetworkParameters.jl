@@ -74,7 +74,7 @@ end
     @test ps isa NetworkParameters{Float64}
     @test NetworkParameters((a = Float32[1, 2],)) isa NetworkParameters{Float32}
 
-    # a promotion, not a uniformity guarantee: unlike `GeometricOptimizers`' `ArrayNamedTuple{T}`,
+    # a promotion, not a uniformity guarantee: unlike a `Vararg` bound on the values,
     # `NetworkParameters{T}` does not license assuming every leaf is a `T`
     mixed = NetworkParameters((a = Float32[1], b = [2.0]))
     @test mixed isa NetworkParameters{Float64}
@@ -136,30 +136,35 @@ end
     @test isconcretetype(only(Base.return_types(NetworkParameters, Tuple{typeof(nt)})))
 end
 
-# `ParameterSet` is the union four packages were spelling out inline. What matters about it is where
-# its edges are, so the tests are the boundary cases rather than the happy path.
-@testset "ParameterSet is either form of a whole parameter set" begin
-    @test ps isa ParameterSet
-    @test nt isa ParameterSet
-    @test nt.L1 isa ParameterSet          # a branch is one too: it is a set of parameters in itself
-    @test NamedTuple() isa ParameterSet
-
-    # a leaf is not, whatever kind of leaf it is
-    @test !([1.0, 2.0] isa ParameterSet)
-    @test !(1.0 isa ParameterSet)
-
-    # and neither is a `Tuple` -- which is where this parts company with `isparametertree`, because a
-    # `Tuple` *is* a branch the walks recurse into (it is what `freeparameters` returns for a
-    # multi-block leaf) but is never a set of parameters handed in whole
-    @test !(([1.0], [2.0]) isa ParameterSet)
-    @test NeuralNetworkParameters.isparametertree(([1.0], [2.0]))
-
-    # the two agree everywhere else, which is the statement that the `Tuple` is the whole difference
-    for x in (ps, nt, nt.L1, NamedTuple(), [1.0, 2.0], 1.0)
-        @test (x isa ParameterSet) == NeuralNetworkParameters.isparametertree(x)
-    end
+# What a whole set of parameters *is*, stated where the type is. There is one answer and it is
+# `NetworkParameters`: an alias unioning it with `NamedTuple` would be a method on `Base.NamedTuple`
+# wherever it were used, and would say the same thing about a set and about a *branch* of one, which
+# are different questions. `isparametertree` answers the branch question and is tested beside it.
+@testset "a whole set of parameters is a NetworkParameters" begin
+    @test ps isa NetworkParameters
+    @test !(nt isa NetworkParameters)          # the bare `NamedTuple` it wraps is not one
+    @test !(nt.L1 isa NetworkParameters)       # nor is a branch of it
+    @test !([1.0, 2.0] isa NetworkParameters)  # nor a leaf, of whatever kind
+    @test !(1.0 isa NetworkParameters)
+    @test !(([1.0], [2.0]) isa NetworkParameters)
 
     # no bound on the element type and none on the depth: a mixed-precision, unevenly nested set is
-    # still one. This is the difference from `GeometricOptimizers.ParameterContainer{T}`.
-    @test (a = Float32[1.0], b = (c = Float64[2.0], d = (e = [3],))) isa ParameterSet
+    # one, with `T` the promotion over its leaves. A `Vararg` bound on the values would make this set
+    # no `T`'s at all.
+    mixed = NetworkParameters((a = Float32[1.0], b = (c = Float64[2.0], d = (e = [3],))))
+    @test mixed isa NetworkParameters
+    @test parameter_eltype(mixed) === Float64
+end
+
+# `isparametertree` is the *other* question: what the walks recurse into. It admits a `Tuple`, which a
+# set of parameters handed in whole never is — a `Tuple` is what `freeparameters` returns for a
+# multi-block leaf such as a horizontal lift, and why `TupleLayout` exists.
+@testset "isparametertree admits a branch and a Tuple, which a whole set is not" begin
+    @test NeuralNetworkParameters.isparametertree(nt)
+    @test NeuralNetworkParameters.isparametertree(nt.L1)
+    @test NeuralNetworkParameters.isparametertree(NamedTuple())
+    @test NeuralNetworkParameters.isparametertree(([1.0], [2.0]))
+
+    @test !NeuralNetworkParameters.isparametertree([1.0, 2.0])
+    @test !NeuralNetworkParameters.isparametertree(1.0)
 end
