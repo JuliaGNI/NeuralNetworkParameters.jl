@@ -136,7 +136,6 @@ the short name.
 """
 params(p::NetworkParameters) = getfield(p, :params)
 
-
 # The `<:Any` is the element type, which comes first so that `NetworkParameters{T}` binds `T` in a
 # method signature — what `GeometricOptimizers` needs of a parameter set to take it as a solution.
 # These three are the only methods here that name a type parameter at all.
