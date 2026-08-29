@@ -90,22 +90,27 @@ wrapped_set(k::Integer) = NetworkParameters(wide_set(k))
 
 const SHAPES = (:bare => wide_set, :wrapped => wrapped_set)
 
-# `time()` and not `@elapsed`: the point is the very first call, and `@elapsed` in a loop reports the
+# `time_ns()` and not `@elapsed`: the point is the very first call, and `@elapsed` in a loop reports the
 # second.
 #
 # **`invokelatest` and not a direct `f(args...)`, and that is the whole measurement rather than a
 # detail.** Compiling `first_call` itself infers through the call in its body — so with a direct call the
 # 1.6 s of inference that `parameterlayout` on a 369-child branch costs is spent while `first_call` is
-# being compiled, *before* `t = time()` ever runs, and the figure printed is 0.00 s. This script read
+# being compiled, *before* `t = time_ns()` ever runs, and the figure printed is 0.00 s. This script read
 # 0.00 s for every width and every column on Julia 1.13 until it was written this way. `invokelatest`
 # makes the call opaque, so there is nothing left for the caller's own compilation to do first.
 #
 # That is the same lesson as the one-process-per-width fix below, from the other end: the harness has to
 # be arranged so that the cost cannot have been paid somewhere the clock is not looking.
+#
+# `time_ns()` and not `time()`, which is the wall clock and steps when the system adjusts it. On one
+# row of the sweep behind the 0.2.5 entry that produced a reported **-1.4 s** where two re-runs read
+# 0.53; a negative first-call time is at least obvious, and a small positive step in the other
+# direction is not. `time_ns()` is monotonic, so a row is the elapsed time or it is nothing.
 function first_call(f, args...)
-    t = time()
+    t = time_ns()
     Base.invokelatest(f, args...)
-    round(time() - t; digits = 2)
+    round((time_ns() - t) / 1e9; digits = 2)
 end
 
 # From inside a function, for the reason `test/flatten_tests.jl` gives: that is the claim that matters,

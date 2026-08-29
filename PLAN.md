@@ -1,536 +1,501 @@
-# NeuralNetworkParameters.jl — analysis and plan
+# NeuralNetworkParameters.jl — plan
 
-Analysis last revised 2026-08-26, against these working trees. The whole family moves in one wave and
-only this package's dependency, `ChainRulesCore`, is outside it. Two rows have landed on `main` since
-the wave began — this package's 0.2.4 and `GeometricOptimizers`' 0.6.0 — and the rest are still
-branches, including this package's 0.2.5, so read the third column before quoting a version as
-released.
+This is a plan, not a record. It says what is still to be done, what a change must not break, and
+how to check both. What has already been done lives in `CHANGELOG.md` and in the issue trackers,
+which carry it in more detail than this file ever did.
 
-| package | version | branch |
-|---|---|---|
-| `NeuralNetworkParameters` | 0.2.5 | this repository, `issue-22-the-eltype-took-values-of-a-branch` (0.2.4 on `main`) |
-| `GeometricBase` | 0.14.9 | `l2norm-over-any-array-and-julia-1.11` |
-| `SimpleSolvers` | 0.13.1 | `retire-the-1.10-getrf-fallback` |
-| `AbstractNeuralNetworks` | 0.7.2 | `adopt-parameterset` |
-| `SymbolicNeuralNetworks` | 0.7.1 | `adopt-parameterset` |
-| `GeometricOptimizers` | 0.6.0 | `main` (#68 and #69 merged) |
-| `GeometricMachineLearning` | 0.6.1 | `adopt-parameterset` |
-| `NonlinearIntegrators` | 0.4.2 | `julia-1.11-and-geometricoptimizers-0.6` |
-| `GMLDatasets` | 0.1.0 | `repair-the-mnist-scripts-against-geometricoptimizers-0.5` |
+Verified against the sibling checkouts on 2026-08-28. Paths written `ANN/…`, `SNN/…`, `GML/…`,
+`GO/…`, `NLI/…`, `SS/…`, `GB/…` are relative to the corresponding checkout.
 
-Paths written `ANN/…`, `SNN/…`, `GML/…`, `GO/…`, `NLI/…` are relative to the corresponding sibling
-checkout.
+## Goals
 
-**Julia 1.11 is the floor across all nine.** Every workaround the move retires was a *1.10*
-workaround, and they were in three places: `SimpleSolvers`' `HAS_PREALLOCATED_GETRF`, whose fallback
-allocated the pivot vector on every factorization in the default linear solver (3360 bytes at
-``n = 384``, measured on 1.10.11); `SymbolicNeuralNetworks`' `Base.tail` walk in `unflatten_batch`,
-which existed for a 1.10-only saving and had this package's D12 in exchange; and a set of 1.10-only
-allocation ceilings in `SNN` and `NLI`. Nothing wanted 1.12, and `GeometricOptimizers`' open issue D1
-is a 140× compile-time cliff *on* 1.12 that 1.13 does not have — so 1.12 would have been the wrong
-floor to choose. It stays in every CI matrix instead.
+1. Provide a structured type for storing neural network parameters across the GML ecosystem:
+   `AbstractNeuralNetworks`, `SymbolicNeuralNetworks`, `GeometricOptimizers`,
+   `GeometricMachineLearning`, `GMLDatasets`, `NonlinearIntegrators`.
+2. Remove all type piracy in the GML ecosystem.
+3. Remove code duplication across the GML ecosystem.
 
-**Status.** Phase 1 is released and registered in General. Phase 2 is complete: this package is where
-the parameter container lives, and `AbstractNeuralNetworks` consumes it. **Phase 3 is done** —
-`GeometricOptimizers` 0.5.0 supplies the leaf protocol for its structured matrices *and* dropped
-`ParameterHandling`, and its 0.6.0 branch takes a `NetworkParameters` through the whole optimizer;
-`GeometricMachineLearning` 0.6.0 handed the HDF5 traversal over. `SymbolicNeuralNetworks` adopted the
-layout type, which §8 had not asked it to.
+**All three are met.** Goal 1 is in use by every package below. Goal 3 has no remainder but one
+exception kept on purpose (§4.1). Goal 2 closed with `GeometricOptimizers` 0.6.1, and closed on a
+*property* rather than a count: `GO/test/aqua_tests.jl` runs `Aqua.test_piracies`, and
+`Aqua.Piracy.hunt` reports zero for all five of `NeuralNetworkParameters`, `GeometricBase`,
+`SimpleSolvers`, `GeometricOptimizers` and `AbstractNeuralNetworks`.
 
-Two things happened in 0.2.2 that no earlier draft of this document anticipated, and both came from
-*outside* — from the review of `GeometricOptimizers` #68 and #69 rather than from this plan:
+§4 is therefore about what the closing of goal 2 exposed rather than about goal 2 itself.
 
-- **D12, the walks were unusable on a wide branch**, which is a defect of this package that the
-  consolidation argument in §2 depended on not existing. It is fixed; see §4.
-- **`ParameterSet`**, one name for `Union{NetworkParameters, NamedTuple}`, which every consumer had
-  been spelling out for itself. See §6 and §8.
+## Specification
 
-The lesson §3 draws — that a status claim here is worth what the last check against the sibling
-checkouts was worth — now has a companion: a *design* claim is worth what the last consumer that tried
-to use it found. §2's "written once against the leaf protocol, one implementation covers all of them"
-was true in intent and false in practice for two years' worth of releases, and the package that noticed
-was the one that had to write its own walk instead.
+The type wraps `NamedTuple`s of `NamedTuple`s of `AbstractArray`s and has a secondary flat
+representation as an `AbstractArray`. Accessors and operations are type-stable and allocation-free.
+The implementation is performance-oriented; §6 says how that is measured here.
 
----
+## Where the ecosystem stands
 
-## 1. Goal
+**Five of the nine are on a branch ahead of `main`.** Three revisions of this file said "every package
+has its wave merged; nothing is waiting on a branch", and that was never checked — §7's first trap,
+which is why the last column is now `git branch --show-current` and a commit count rather than a
+claim. Taken from the working trees:
+
+| package | version | branch | ahead of `main` |
+|---|---|---|---|
+| `NeuralNetworkParameters` | 0.3.0 | `plan-for-the-de-piracy-wave` | 2 |
+| `GeometricBase` | 0.14.9 | `neuralnetworkparameters-extension` — identical to `main`; PR #16 closed | 0 |
+| `SimpleSolvers` | 0.13.2 | `neuralnetworkparameters-extension` | 3 |
+| `AbstractNeuralNetworks` | 0.8.0 | `rename-arraynamedtuple` | 1 |
+| `SymbolicNeuralNetworks` | 0.8.0 | `main` — untracked `GMLPLAN.md`, kept on purpose, see §4.2 | 0 |
+| `GeometricOptimizers` | 0.7.0 | `close-the-type-piracy` | 7 |
+| `GeometricMachineLearning` | 0.6.1 | `main` | 0 |
+| `NonlinearIntegrators` | 0.4.2 | `main` | 0 |
+| `GMLDatasets` | 0.1.0 | `keep-the-mnist-weights-out-of-the-generated-docs` | 1 |
+
+`GeometricMachineLearning` reads 0.6.1 because 0.6.1 is itself unreleased — its changelog carries it as
+`[Unreleased] — 0.6.1`, so §4.3.1's work is folded into that entry rather than opening a new one.
+
+**`NeuralNetworkParameters` 0.3.0, `AbstractNeuralNetworks` 0.8.0, `SymbolicNeuralNetworks` 0.8.0,
+`SimpleSolvers` 0.13.2 and `GeometricOptimizers` 0.7.0 have to be registered in dependency order**,
+because the second requires the first by version: three of the methods it used to pirate are only in
+that release. `GeometricBase` is **not** in the chain — 0.14.9 is registered and unchanged, and the
+0.14.10 that used to be in this list held nothing but the extension that is now `ext/
+GeometricBaseExt.jl` here. See §4.1 for what the remaining chain costs downstream.
+
+**Julia 1.11 is the floor across all of these except `GeometricBase`**, which keeps 1.10 and is
+unaffected: nothing there names this package. Every workaround the move retired was a *1.10*
+workaround, in three places: `SimpleSolvers`' `HAS_PREALLOCATED_GETRF`, whose fallback allocated the
+pivot vector on every factorization in the default linear solver; `SymbolicNeuralNetworks`'
+`Base.tail` walk in `unflatten_batch`; and a set of 1.10-only allocation ceilings in `SNN` and
+`NLI`. 1.10 also cannot inline a `@generated` body, which §3 needs. Nothing wants 1.12 as a floor;
+it stays in every CI matrix instead.
+
+## 1. What the package provides
 
 For the networks defined in `AbstractNeuralNetworks`, `GeometricMachineLearning` and
-`SymbolicNeuralNetworks`, provide:
+`SymbolicNeuralNetworks`:
 
-- **(a)** a structured parameter type — `NamedTuple`s of `NamedTuple`s of `AbstractArray`s following the
-  architecture;
+- **(a)** a structured parameter type — `NamedTuple`s of `NamedTuple`s of `AbstractArray`s following
+  the architecture;
 - **(b)** a flat `AbstractArray` form suited to computing derivatives;
-- conversions, such that a derivative taken with respect to the flat form can be returned structured;
+- conversions, such that a derivative taken with respect to the flat form comes back structured;
 - HDF5 read and write.
 
-Additional dependencies must be lean and must not pull a long chain. The package adds exactly one,
-`ChainRulesCore`, whose own dependencies are `Compat` and `LinearAlgebra`.
-
-## 2. Why the package is needed
-
-The parameter type used to live *downstream*, in `ANN/src/parameters.jl`, and the rest of this
-functionality was implemented separately in `GeometricOptimizers` and `GeometricMachineLearning`. Three
-things drove the consolidation. The first two are now partly demonstrated rather than argued, so each
-records what has actually come of it.
-
-**The same traversal was written many times over.** Recurse into the `NamedTuple`s, do something at
-each leaf, put it back: that is `flatten`/`unflatten`, `h5save`/`h5load`, `changebackend`, `map_to_cpu`,
-`_statify`, the optimizer's elementwise primitives, and `_eltype`/`apply_toNT` — each re-declaring a
-method per structured type, in four packages. Written once against the leaf protocol, one
-implementation covers all of them and needs to know none of the types. **What that has come to, checked
-against the working trees rather than remembered:** ANN's copies are gone, its `changebackend` and
-`_statify` each one `mapparameters` call; GML's `h5save` and its "natural sort" are gone, its
-`map_to_cpu` is one `mapstorage` call, and its `apply_toNT` and `_eltype` are gone with them; SNN's
-`FlatSlice` is gone; GO's `apply_toNT` and its `ParameterHandling` flattening went in 0.5.0 and its
-`_mapleaves` in 0.6.0.
-
-**One is left, and it is left on purpose.** GML's `_tree_optim_step!` is still hand-written, and
-`GML/src/optimizers/optimizer.jl:270-292` now gives two reasons that `foreachparameters` cannot serve:
-the recursion is keyed on the *cache* tree and stops where the cache stops, so a layer's `NamedTuple`
-arrives whole rather than being descended into; and `λY` is *broadcast* rather than zipped, one
-`GlobalSection` standing in for a whole subtree. That is a different walk, not a copy of this one.
-Earlier revisions of this section listed four more items here that had already been done.
-
-**A parameter set needs to be a type somebody owns.** Most of the type piracy `GeometricOptimizers`
-issue #16 tracks is not about flattening: the container is a bare `NamedTuple` (aliased
-`ArrayNamedTuple`), so `outer!` (`GO/…/bfgs_cache.jl:90`), `(grad::Gradient)(::ArrayNamedTuple)`
-(`GO/…/named_tuple_wrapper.jl:97`), `Base.copyto!` (`:141`) and two sites in
-`GO/src/optimizers/optimizer_status.jl` (`:163`, `:185`) all dispatch on types nobody owns. Its
-comments ask for *"a wrapper struct"*. `NetworkParameters` is that struct, and it exists — but GO has
-not adopted it yet, so these five sites still stand. Downstream of it, `NetworkParameters` is already
-the container in `AbstractNeuralNetworks` 0.7.0, `GeometricMachineLearning` 0.6.0,
-`SymbolicNeuralNetworks` 0.6.0 and `NonlinearIntegrators` 0.4.0.
-
-**`ParameterHandling` cannot express these parameters.** See §7. Still true, and still the reason GO's
-remaining work is a removal rather than a wrapping.
-
-## 3. What changed over the course of the analysis
-
-Recorded because each of these invalidated an earlier draft of this document, and because the same
-thing keeps happening.
-
-**The GML/GeometricOptimizers type fork is resolved.** GO 0.4.0 made the manifold geometry public API;
-GML#239 deleted GML's own copies of eleven types and `go_bridges.jl` with them — about 2500 lines, all
-of `src/manifolds/`, and all of `src/arrays/` bar `poisson_tensor.jl`. GML now imports them from GO, and
-`GML/src/arrays/gml_extensions.jl` is 43 lines holding only `add!`. Earlier drafts of this plan had an
-"eight duplicate walks across four packages" inventory and a plan to collapse `go_bridges.jl`; both are
-obsolete, and §2 above is the reduced version.
-
-**GeometricOptimizers already has the free-storage accessor, and it is `Base.parent`.** GO 0.4.0 added
-the `VectorStorageMatrix` alias (`GO/src/special_matrices/vector_storage_matrix.jl:35`) for the four
-types keeping their free parameters in one vector, and writes each optimizer primitive once over it.
-`Base.parent` is defined across the family:
-
-| type | `parent` | file |
-|---|---|---|
-| `SkewSymMatrix` | `A.S` | `GO/src/special_matrices/skew_symmetric.jl:103` |
-| `SymmetricMatrix` | `A.S` | `GO/src/special_matrices/symmetric.jl:143` |
-| `AbstractTriangular` | `A.S` | `GO/src/special_matrices/triangular.jl:8` |
-| `Manifold` | `A.A` | `GO/src/manifolds/abstract_manifold.jl:147` |
-| `StiefelLieAlgHorMatrix` | `(A.A, A.B)` | `GO/src/lie_algebras/stiefel_lie_algebra_horizontal.jl:81` |
-| `GrassmannLieAlgHorMatrix` | `(A.B,)` | `GO/src/lie_algebras/grassmann_lie_algebra_horizontal.jl:80` |
-
-Its docstring states the principle this package arrived at independently: *"For every one of these types
-the free parameters are the coordinates the optimizer should work in, so each primitive is the
-corresponding operation on `parent`."*
-
-So `freeparameters` is deliberately **not** `Base.parent`, but adoption is one method rather than one
-per type. `parent` of a `SubArray` is the whole underlying buffer rather than the view's own entries, so
-Base's relation and this one do not agree in general, and flattening on `parent` would silently take in
-too much.
-
-**The ecosystem moved while this document sat still, for the second time.** Every version in the table
-above changed between the 2026-08-19 revision and this one, and §8 said "Phases 2 and 3 are not
-started" while `AbstractNeuralNetworks` had already shipped Phase 2 as 0.7.0 and both
-`GeometricOptimizers` and `GeometricMachineLearning` had shipped half of Phase 3. Two of the plan's own
-predictions came out differently: the compatibility alias §8 asked for was deliberately not added, and
-`SymbolicNeuralNetworks`, which §8 said needed no change, adopted `ParameterLayout` and deleted
-`FlatSlice`. Both are recorded where they happened. The lesson for whoever revises this next is that a
-status claim here is worth exactly as much as the last time somebody checked it against the sibling
-checkouts, so §8 is now written as *where each package stands* rather than as a list of phases to do.
-
-## 4. Defects on record
-
-D1, D2, D3, D4, D7, D8, D9, D10, D11, D12, D13 and D14 are fixed — which is all of them but D5 and
-D6, and those two are open *in `GeometricOptimizers`* rather than here. D15 through D21 are new in this
-revision and are all seven defects of this package's own 0.2.2 work, found by running it rather than by
-reading it.
-
-**D17 and D18 came from reviewing 0.2.2 itself**, and the lesson is narrower than D16's and worth as
-much: D13 was fixed on the two walks the tests measured, and the three that take a second set were
-neither fixed nor measured — while being the walks that run every iteration rather than once. A
-guarantee holds where it is asserted and nowhere else.
-
-**D16, D19 and D20 are one lesson from three sides: a harness reports what it is pointed at.** D16
-swept its widths in one process, so every row but the first measured what its predecessors had
-compiled. D19 timed a direct call, so the inference being timed was spent before the clock started.
-D20 is the argument rather than the clock — every set the sweep and the wide-branch tests build is a
-bare `NamedTuple`, and a consumer holds a `NetworkParameters`. On Julia 1.11 that is 1.35 s against
-13.40 s for `parameterlayout` on the same 369 leaves, so the committed table reports the cheap column
-and calls it the cost.
-
-**D21 is the fourth side, and it is what the other three are for.** Pointing the harness at the shape
-a consumer holds is what made a 13× gap visible; D20 then closed on the gap as a property of the two
-entry points, because the bare column looked healthy and nothing in it moved. It was one unused type
-parameter, and the bare column could not have shown it — only the wrapped path has a caller that has
-to infer through the layout type. A two-column sweep earns its keep by making a difference visible,
-not by explaining it, and D20 stopped a step early.
-
-**Three entries in this table were stale when this revision began**, and all three in the same
-direction: D3, the `changebackend` half of D8, and D11 were recorded as open and had been fixed in
-`GeometricOptimizers` 0.5.0 and `GeometricMachineLearning` 0.6.0. §3's lesson had one revision of
-practice and then failed again.
-
-**D12, D13 and D14 are this package's own, and none of them was found here.** All three came from the
-review of `GeometricOptimizers` #68, which needed `mapparameters` on the one parameter shape it has a
-named consumer for and could not compile it. They are grouped because they are one cliff seen from
-three sides — compile time, forward allocations, reverse allocations — and because two of them
-contradicted docstrings in this repository that the test suite was affirming, since every set it tested
-was narrow enough to stay below the cliff. `test/wide_branch_tests.jl` is the width a consumer actually
-has, and `scripts/wide_branch_cost.jl` is the harness.
-
-| # | defect | location | status |
-|---|---|---|---|
-| D1 | `Aversion = "0.1.0"` typo — the package had **no `version` field at all** | `Project.toml:4` | **fixed, phase 1** |
-| D2 | Stale `Manifest.toml` pinning `AbstractNeuralNetworks v0.3.0` | `Manifest.toml` | **fixed, phase 1** — the file is untracked and `.gitignore`d |
-| D3 | `changebackend` for the five wrapper types is defined **only inside GML's HDF5 extension**, so `changebackend(GPU(), nn)` on a `PSDLayer`/`LASympNet` network MethodErrors unless HDF5 happens to be loaded | was `GML/ext/HDF5Ext.jl` | **fixed** — `GO/ext/AbstractNeuralNetworksExt.jl` carries one method over `Manifold`/`VectorStorageMatrix`/`AbstractLieAlgHorMatrix`, delegating to `mapstorage`, and GML's copies are gone. `changebackend(GPU(), nn)` no longer depends on HDF5 being loaded |
-| D4 | HDF5 returns group members sorted, worked around by a regex "natural sort" that silently falls back to lexicographic order unless *every* key matches `^\D+\d+$` | was `GML/ext/HDF5Ext.jl:87-97` | **fixed** — this package records key order as a group attribute, and GML's `_natural_sort_keys` is gone. `ext/HDF5Ext.jl:217-221` keeps the regex guess for files that record nothing better, guarded so it leaves the order alone unless every key matches |
-| D5 | `unflatten` rebuilds a manifold via `Base.typename(typeof(x)).wrapper`; the comment records that hardcoding `StiefelManifold` previously turned a `GrassmannManifold` into one on every round trip | `GO/…/named_tuple_wrapper.jl:16-23, 78-79` | open in GO — step 2 of the GO work in §8. Not a defect here: `rebuild` takes a prototype, so the concrete type cannot drift |
-| D6 | `ParameterHandling.flatten` defaults to `Float64`, silently promoting `Float32` networks | `GO/…/named_tuple_wrapper.jl:14` | open in GO — step 2 of the GO work in §8. Not a defect here: `flatten(ps)` takes its element type from `parameter_eltype(ps)` |
-| D7 | With the type moved out of ANN, `ZygoteRules.pullback(f::Function, ::NeuralNetworkParameters)` owns neither argument type and becomes piracy there | was `ANN/src/pullback_for_applychain.jl:10-17` | **fixed** — the generic method is `ext/ZygoteRulesExt.jl:17`, and `ANN/src/pullback_for_applychain.jl:10-14` records the move |
-| D8 | GML's `h5save(::H5DataStore, ::StiefelManifold, ::AbstractString)` and `changebackend(::NeuralNetworkBackend, ::StiefelManifold)` are genuine type piracy — the generics are ANN's and the types are GO's, so GML owns nothing in either signature | `GML/ext/HDF5Ext.jl` | **fixed, both halves.** The `h5save` half went with GML's extension, which defines no `h5save` at all; the `changebackend` half went to `GO/ext/AbstractNeuralNetworksExt.jl` — see D3. `GML/ext/HDF5Ext.jl` is 86 lines and is `save`/`load` entry points and nothing else |
-| D9 | `Base.NamedTuple(p::NeuralNetworkParameters)` — Base's constructor and ANN's type, so the package defining it owns neither. Surfaced by GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/src/layers/forcing_dissipation_layers.jl` | **fixed, phase 1** — `src/parameters.jl:162` |
-| D10 | `h5save(::HDF5.Group, ::NeuralNetworkParameters, ::AbstractString)` — ANN's generic and ANN's type, from GML. Nothing existed for a parameter set nested at a path, which the parameter-dependent architectures produce. Also GML [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207) | was `GML/ext/HDF5Ext.jl` | **fixed** — `src/io.jl` owns the generic HDF5 path, so a nested parameter set serialises without anybody committing piracy |
-| D11 | `GeometricOptimizers.GlobalSection(ps::NetworkParameters)` — `GlobalSection` is GO's and `NetworkParameters` is this package's, so GML owns neither. Not in the original survey; it appeared when GML adopted the container while GO had not | was `GML/src/optimizers/optimizer.jl` | **fixed** — GO owns it, at `GO/src/global_sections/global_sections.jl:45`, and deliberately returns a plain `NamedTuple` tree rather than a container: a section is not a parameter |
-| D12 | **The walks were superlinear in the width of one branch.** Every across-children walk was an `@inline`d `Base.tail` chain, and `Base.tail` yields a new tuple type per level — so `k` children cost `k` specialisations over `O(k)`-long argument types and inference grew as `k³`. `flatten` on a flat 369-leaf set, the MNIST transformer of GMLDatasets, did not finish | was `src/flatten.jl`, `src/walk.jl`, `src/leaves.jl`, `src/layout.jl`, `src/derivatives.jl` | **fixed, 0.2.2** — written out as `@generated` flat bodies at literal indices. 369 leaves: `flatten` 2.05 s, `mapparameters` 0.00 s. Julia 1.11 is the compat floor as a consequence: 1.10 cannot inline a `@generated` body, and that inlining is what D13 needs. **Two things `GeometricOptimizers` [#70](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/70) adds, one confirming this account and one qualifying it.** Its three quadrature folds carry **no `@inline` at all**, deliberately, and hit the same cliff at the same width — so the cliff is not conditional on the `@inline`, which is independent confirmation from the other end of 0.2.2's finding that removing it did not help. But the **Julia version matters more than this entry implies**: an un-`@inline`d `Base.tail` fold at 369 children is 0.65 s on 1.11.9 and 26 to 35 s on 1.12.7 and 1.13.0-rc3. D12 was diagnosed on walks that were written out for every version, so the interaction never showed here. Anyone reasoning from this entry to a *new* `Base.tail` walk must not conclude that going without the `@inline` is safe on 1.11 evidence |
-| D13 | `flatten!`/`unflatten!` allocated past about forty children — 81 488 bytes at 48, 187 808 at 64 — against the guarantee in their own docstrings, because `values(ps)` and `values(l.children)` materialise a temporary tuple per branch | was `src/flatten.jl` | **fixed, 0.2.2** — the walks index the branch in place with `getfield` and take no `values`. Zero at every width and every depth, on Julia 1.11, 1.12 and 1.13. See D17: the fix reached the two forward walks and not the three that take a second set |
-| D14 | The reverse pass had D13's defect too: 70 592 bytes per pullback call at 48 children, 161 504 at 64 | was `src/derivatives.jl` | **fixed, 0.2.2** — `_accumulate_named!` splices the branch's keys in as literals, which is also what keeps `_cotangent_get`'s `haskey` a compile-time question |
-| D15 | **The `@generated` walks raised `MethodError: … may be too new` when the sources are evaluated rather than loaded from a cache.** `_map_zip` and `_foreach_zip` called `_children_arity` from their *generator* bodies, and it was defined below them in the same file; a generator runs in the world age of its own method definition, so it was invisible. Precompilation hides this by giving every method in a module one world age, which is why the whole suite passed with it present | was `src/walk.jl:277,284` vs `:311` | **fixed, 0.2.2** — the helper is defined above every caller, and `test/world_age_tests.jl` runs the walks in a subprocess under `--compiled-modules=no`, which is the only way to ask |
-| D16 | **`scripts/wide_branch_cost.jl` swept its widths in one process, so every row but the first measured what its predecessors had compiled.** Every figure the 0.2.2 work first quoted was wrong — `flatten` on 0.2.1 at 128 children was recorded as 17.57 s against 2.08 s cold, and at 369 as "not run to completion" against 12.82 s, and `mapparameters` read as `0.00 s` where cold it was 1.51 s. `GeometricOptimizers` closed an issue of its own on that `0.00 s` and deleted a file on the strength of it | was `scripts/wide_branch_cost.jl` | **fixed, 0.2.2** — one process per width, and the `--cold-map` flag deleted with the need for it. A measurement you have to ask for in a special way is one the default run is getting wrong |
-| D17 | **D13 was fixed on the two walks that were measured and not on the three that were not.** `mapparameters!`, `mapstorage!` and `foreachparameters` turned each *further* argument into a `values(...)` tuple per branch, and a skipped one into a fresh tuple of `nothing`s — 800 bytes a call on a flat 48-child set, 6 144 at 369, and three to four times that on a branch of branches. These are the walks an optimizer runs every iteration, where `flatten!` runs once or twice | was `src/walk.jl:152,196,293-297` | **fixed** — `_foreach_zip` reads every argument with `getfield` at a literal index; `_values_for` and `_tuple_for` are gone. Zero at every width, depth and arity. Not caught because measuring a `Vararg` method needs a zero-argument closure: `@allocated f(a, b)` lowers to `Base.allocated(f, a, b)`, whose own splat allocates |
-| D18 | **The in-place walks paired the children of two keyed branches by *position*.** `_values_for(x, ks)` ignored its `ks`, so two same-shaped sets whose keys were ordered differently wrote every leaf into the wrong parameter without a word, where `mapparameters` has always raised | was `src/walk.jl:293` | **fixed** — the generated body checks a named argument's keys against the branch's own, in the generator, so the guard is free at run time and stricter than `_check_keys`. A behaviour change: positional pairing of differently-keyed sets now raises |
-| D19 | **`scripts/wide_branch_cost.jl` still was not measuring compile time after D16.** `first_call` timed a direct `f(args...)`, and compiling `first_call` infers through that call — so the inference being timed was spent before its own `t = time()` ran. On Julia 1.13 the committed harness printed 0.00 s for every width in every column, where an opaque call measures 1.61 s for `parameterlayout` and 3.95 s for `flatten` at 369 children | was `scripts/wide_branch_cost.jl:38-42` | **fixed** — the call goes through `Base.invokelatest`. D16 and this are the same lesson from two ends: arrange the harness so the cost cannot have been paid somewhere the clock is not looking |
-| D20 | **The wide-branch tests and the sweep script measure a bare `NamedTuple`, and a consumer holds a `NetworkParameters`.** The two reach `parameterlayout` through different methods and, on Julia 1.11, cost wildly different amounts on the same leaves: 1.35 s bare against 13.40 s wrapped at 369, 2.77 s against 87.77 s at 768. So the 0.2.2 table reports the cheap column, and issue [#16](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/16) read the gap between the two as a cost of *nesting* — which it is not: a flat 369-leaf set and a 16 × 24 one cost the same 1.35 s bare and the same 13.8 s wrapped | was `test/wide_branch_tests.jl:27`, `scripts/wide_branch_cost.jl:32` | **fixed** — the sweep runs both shapes at every width, each in its own process, and `test/wide_branch_tests.jl` asserts the round trip and the zero allocations on the wrapped shape. This entry closed on the measurement without a cause, and recorded that no code needed to change on the grounds that the whole path cost nearly the same either way (19.96 s bare, 21.90 s wrapped at 369) so the wrapper only decided which entry point paid. **That was where to look and not what to conclude**: the gap had a cause, D21 is it, and 0.2.3 removed it. The two columns agree now |
-| D21 | **`LeafLayout` carried a `prototype` field that nothing read, and it was the cost D20 measured.** A `LeafLayout` is by construction the terminal case, so `rebuild` on it is the identity and is never called — but the field's type parameter put each leaf's *concrete array type* into the layout type of every branch above it, 1849 nodes in the type tree of a 369-leaf wrapped layout against 742 without. `_layout(::NetworkParameters, ::Int)` is where a caller paid for it, inferring through the child walk's whole return type to wrap its result, and inference on such a type grows faster than the type does: 2.5 times the type was 13 times the time. The bare column never showed it, because only the wrapped shape has such a caller — which is exactly why D20's two-column sweep was needed to find it and D20's own conclusion was not | was `src/layout.jl:29` | **fixed, 0.2.3** — the struct is `LeafLayout{N}` over `range` and `size`. `parameterlayout` on a 369-leaf set inside a `NetworkParameters` goes 13.40 s → 1.05 s and at 768 leaves 87.77 s → 3.01 s, the whole 369-wrapped path 21.90 s → 8.64 s, and Julia 1.11, 1.12 and 1.13 agree at 1.05/1.13/1.03 s where the compat floor used to be the one that behaved differently. `scripts/leaf_layout_cost.jl` is the harness. Issue [#15](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/15) filed it as hygiene and said explicitly it was not the cause: it had compared two leaf *sets* under one layout type, never the layout type with and without the parameter |
-| D22 | **`scripts/wide_branch_cost.jl` did not sweep the fold.** It timed `parameterlayout`, `map(zero, ·)`, `mapparameters`, `flatten` and `unflatten` and the in-place allocations, at both shapes and every width, and not `foldparameters` at either. That was the one walk whose downstream analogue had just produced a two-orders-of-magnitude compile cliff, and the only thing standing in for a figure was the total wall clock of a suite that folds 369 children while asserting the value alone. D16 and D19 are the same lesson about the clock; this is it about an argument | was `scripts/wide_branch_cost.jl` | **fixed, 0.2.4** — three columns, `fold`, `foldzip` and a `tailfold` control that is the `Base.tail` recursion a consumer writes without a zipped fold. Filed as part 2 of issue [#19](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/19) |
-| D23 | **`parameter_eltype` took `values` of a branch — D13's defect on the tenth walk, and the one none of D13, D17 or D22's work measured.** It allocated 0 bytes at 32 children and 544 at 33, which is where `Base` stops unrolling a tuple, then 800 at 48 and 6 144 at 369 — D17's two figures exactly. It reached further than the promotion itself: `flatten(ps)` is `flatten(parameter_eltype(ps), ps)`, so the documented spelling for "the parameters' own element type" paid 6 144 B more than `flatten(T, ps)`, and every `NetworkParameters` runs its constructor through the promotion, so *building* a wide set paid it too. **A branch of branches paid it as well, on the shape that does not look worst**: the width of the *outer* branch is what decides it, so a 16 × 24 set of 384 leaves was free while a 48 × 2 one — a child per layer, which is what a network of many layers is — cost 3 168 B and a 369 × 2 one 23 840 B | was `src/leaves.jl:187` | **fixed, 0.2.5** — `_promote_eltypes` takes the branch rather than its `values` and reads it in place at literal indices, the treatment the other nine across-children walks got in 0.2.2 and 0.2.3. Zero at every width, depth and shape, and `flatten(ps)` now costs exactly `flatten(T, ps)`. Found by a consumer (`GeometricOptimizers` [#70](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/70)) rather than here, because `scripts/wide_branch_cost.jl` had no column for the element type — which is **D22's lesson one walk over**, and the column is there now. Issue [#22](https://github.com/JuliaGNI/NeuralNetworkParameters.jl/issues/22) proposed a different fix, settling the element type in the generator's *type* domain, and it was not taken: the runtime chain it blamed allocates nothing (`_promote_eltypes` on an already-built tuple is 0 B at 369) and costs 0.031 s cold against 0.036 s, while settling an `AbstractArray` child with `eltype` would read the interface a leaf presents where the promotion reports the storage it has — a leaf that is an `AbstractMatrix{Float64}` over a `Vector{Float32}` would have flattened into a vector twice as wide. Nothing pinned that; `test/leaves_tests.jl` does now, and the docstring states it as a guarantee |
-
-D8's two halves are the clearest evidence for the protocol, and they were fixed by different packages
-at different times. With the structured types upstream of the package that trains with them, a
-*generic* HDF5 path driven by `freeparameters`/`rebuild` is the only way to serialise them without
-somebody committing piracy — and once that path existed, GML's copy could simply be deleted while GO
-registered its own types. The `changebackend` half is the same shape and is still waiting, because
-`changebackend` is `AbstractNeuralNetworks`' generic rather than this package's: the methods belong in
-a `GeometricOptimizers` extension on `AbstractNeuralNetworks`, which is a different release chain.
-`GML/ext/HDF5Ext.jl:17-20` records that reasoning in place.
-
-**The flat-ordering question is settled.** Earlier drafts left open whether this package's leaf
-ordering matches GO's, since `GO/test/named_tuple_parameters.jl:21-22` asserts specific flat ranges.
-It does — verified by running both flattenings over one of each leaf family, and explicable rather than
-lucky: `Base.vec` and `Base.parent` return the same storage for every `VectorStorageMatrix`, and this
-package copies leaves in linear index order (`src/flatten.jl:103-104`). The table in §8 works through
-it family by family. So the migration is byte-for-byte behaviour-preserving on the flat vector and
-GO's hardcoded ranges stand — which is worth pinning with a test while both packages are still present,
-since nothing else would catch a later drift.
-
-## 5. Evidence
-
-Verified by running code rather than by reading, so it can be rechecked.
-
-**A package cannot export a type sharing its own name.** The module binding wins at the `using` site:
-a scratch package `Foo` exporting `struct Foo` gives `using Foo; Foo(1)` →
-`ERROR: objects of type Module are not callable`. (`Foo.Foo` *is* the struct; the clash is only in the
-importer's namespace.) Hence the type is `NetworkParameters`. An earlier draft concluded from this that
-`AbstractNeuralNetworks` should keep a `const NeuralNetworkParameters = NetworkParameters` alias; it
-removed the name instead, so that one type has one name — see §8.
-
-**Flattening is cheap.** 1.3M parameters, five 512-wide dense layers, `Float64`: `flatten` 0.144 ms,
-`flatten!` into a preallocated buffer 0.133 ms, `unflatten` 0.149 ms — against **0.946 ms for one
-forward pass at batch 32**. A round trip is about 10 % of a single forward pass.
-
-**Reshaped views keep the BLAS fast path**, so the argument against shared storage is *element type*,
-not speed: `reshape(view(v, r), m, n)` is a `StridedArray` and `mul!` runs at 0.089 ms either way. An
-earlier draft had this backwards. The decisive constraint is that `unflatten` must be able to return
-arrays of a different element type from the parameters — `ForwardDiff.Dual`, noted at
-`GO/…/named_tuple_wrapper.jl:19-22` — and a `Float64` buffer cannot be shared with a `Dual` view. Hence
-copy semantics, with allocation-free in-place variants for inner loops.
-
-## 6. The package, as built
+Dependencies must stay lean and must not pull a chain. The package adds exactly one,
+`ChainRulesCore`, whose own dependencies are `Compat` and `LinearAlgebra`. **Any proposal that adds
+a second dependency to the main package has to argue against this line.**
 
 | file | contents |
 |---|---|
-| `src/parameters.jl` | `NetworkParameters`, `params`, `ParameterSet`, and the `NamedTuple` forwarding |
+| `src/parameters.jl` | `NetworkParameters`, `params`, `ParameterSet`, the `NamedTuple` forwarding |
 | `src/leaves.jl` | `freeparameters`, `rebuild`, `parameter_metadata`, `parameter_eltype`, `isterminal`, `isparametertree` |
-| `src/walk.jl` | `mapparameters`, `mapstorage`, the in-place and `foreach` forms, `foldparameters` and `foldstorage`, all of them at any arity |
+| `src/walk.jl` | `mapparameters`, `mapstorage`, the in-place and `foreach` forms, `foldparameters`, `foldstorage`, at any arity |
 | `src/layout.jl` | `ParameterLayout` and its five concrete cases, `parameterlayout`, `parameterrange`, `flatlength` |
-| `src/flatten.jl` | `flatten`, `flatten!`, `unflatten`, `unflatten!`, and the Jacobian split |
+| `src/flatten.jl` | `flatten`, `flatten!`, `unflatten`, `unflatten!`, the Jacobian split |
 | `src/flat_parameters.jl` | `FlatParameters`, the `AbstractVector` interface, layout-preserving `similar` and broadcasting |
 | `src/io.jl` | the `h5save`/`h5load`/`save`/`load` generics and the type registry |
 | `src/derivatives.jl` | `ChainRulesCore` rules for both conversions |
-| `ext/HDF5Ext.jl` | the storage methods |
-| `ext/ZygoteRulesExt.jl` | `pullback` on a `NetworkParameters`, D7's new home |
+| `ext/HDF5Ext.jl`, `ext/ZygoteRulesExt.jl` | the storage methods; `pullback` on a `NetworkParameters` |
+| `ext/GeometricBaseExt.jl` | `L2norm`, from which the generic `l2norm(x) = sqrt(L2norm(x))` follows |
 
-Design points worth keeping in view:
+**Where a method between two packages goes is decided by which one can test it**, not by which owns
+the generic — ownership admits both, since a method is piracy only when the function *and* every
+dispatched argument type belong elsewhere. `L2norm` over a parameter set is therefore here:
+`GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so an extension there was
+one nobody could exercise, and its assertion had to sit in `GeometricOptimizers`, two packages from
+the definition. It also depends on the leaf protocol and `foldparameters`, which are this package's to
+change. `test/geometric_base_tests.jl` covers it.
 
-- **`ParameterSet` is the dispatch type; `NetworkParameters` is the container.** New in 0.2.2, and it
-  is the answer to a question this document never asked: what should a method take when it wants *the
-  parameters* and does not care which of the two forms it was handed? Every consumer had answered it
-  separately — `Union{NamedTuple, NetworkParameters}` inline at eight sites in `AbstractNeuralNetworks`
-  and fifteen in `GeometricMachineLearning`, `const EquationSet` in `SymbolicNeuralNetworks`, and in
-  `GeometricOptimizers` a *narrower* alias, `ParameterContainer{T}`, plus sixteen inline fallbacks
-  where that one did not fit.
+One package still carries a method on this package's types, as an extension on a weak dependency, so
+it costs nothing to a caller who does not load this one:
 
-  It is keyed only, and deliberately not `isparametertree`'s domain, which also admits a `Tuple`: a
-  `Tuple` is a branch the walks recurse into — it is what `freeparameters` returns for a multi-block
-  leaf, and why `TupleLayout` exists — but never a set of parameters handed in whole. The two agree on
-  everything except the `Tuple`s, and `test/parameters_tests.jl` asserts exactly that rather than the
-  happy path.
+| package | file | methods |
+|---|---|---|
+| `SimpleSolvers` 0.13.2 | `SS/ext/SimpleSolversNeuralNetworkParametersExt.jl` | `GradientAutodiff(F, ps)`, `GradientFunction(F, ∇F!, ps)`, `alloc_h(ps)` |
 
-  It also puts **no bound on the element type and none on the depth**, which is the whole difference
-  from `GeometricOptimizers.ParameterContainer{T}` — see §8 for why that one has to exist as well.
+## 2. Why the package is needed
 
-- **The leaf protocol is the whole extension surface.** `freeparameters(x)` gives the differentiable
-  storage, `rebuild(prototype, data)` puts a leaf back. `freeparameters` may return an array, a scalar,
-  or a `Tuple`/`NamedTuple` for multi-block types, and the recursion continues into it. Nothing in the
-  package holds a list of structured types.
+Two arguments still decide something. The rest — the inventory of traversals that were written many
+times over and have since been deleted — is done, and each package's changelog records its own half.
+
+**A parameter set has to be a type somebody owns.** A bare `NamedTuple` container means every method
+taking a parameter set dispatches on a type nobody owns, which is global: any package that loads the
+definer silently gets the new behaviour. `NetworkParameters` is that type, and it is what made the
+eight methods of `GeometricOptimizers` issue
+[#16](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/16) movable — five of them upstream
+to the packages that own their generics, two behind a `GeometricOptimizers`-owned
+`RiemannianGradient <: SimpleSolvers.Gradient`, one narrowed onto that package's own `Hessian` types.
+The issue is closed and `GO/test/aqua_tests.jl` is the ledger now.
+
+**`ParameterHandling` cannot express these parameters.** See §5. It is why GO's remaining work was a
+removal rather than a wrapping, and why it stays removed.
+
+## 3. Design invariants
+
+Properties a change has to preserve. Each is asserted somewhere, and where it is asserted is named,
+because **a guarantee holds where it is asserted and nowhere else** — the allocation defect below
+was fixed on the two walks the tests measured, then found again on three that were not measured, and
+again on a tenth that had no column in the sweep.
+
+- **`NetworkParameters` is the type of a whole set of parameters, and the only one.** A *branch* of
+  one is a plain `NamedTuple` and is a different question, answered by `isparametertree` — whose domain
+  also admits a `Tuple`, because a `Tuple` is a branch the walks recurse into but never a set handed in
+  whole. `test/parameters_tests.jl` asserts both, separately, which is the shape of the distinction.
+- **`NetworkParameters{T}` bounds neither the leaves' element type nor the depth**: its `T` is a
+  *promotion* over the leaves. A caller wanting "flat, and every leaf an `AbstractArray{T}`" should not
+  spell it as a `NamedTuple` bound: an alias for `Base.NamedTuple` is a type nobody owns, so a method
+  on it is a method on `Base.NamedTuple` and collides with every other such alias in the same method
+  table. That is what `GeometricOptimizers` removed in 0.7.0.
+- **Where two shapes genuinely reach one function, it has two methods** — not one signature over a
+  union alias. An alias admits everything of that shape everywhere it is used; a method says which
+  caller it is for. There are eight such pairs across the ecosystem and each carries its reason;
+  §4.3.1 lists them. The two shapes that recur are a *branch* of a set, and the bare `NamedTuple` a
+  **reverse pass** produces, which is why `applychain` has one.
+- **The leaf protocol is the entire extension surface.** `freeparameters(x)` gives the
+  differentiable storage; `rebuild(prototype, data)` puts a leaf back. `freeparameters` may return
+  an array, a scalar, or a `Tuple`/`NamedTuple` for a multi-block type, and the recursion continues
+  into it. Nothing here holds a list of structured types.
+- **A walk over a set recurses through the *leaf's* generic, not through its own.** `GeometricBase`'s
+  `L2norm(::ParameterSet)` folds `abs2(l2norm(leafᵢ))` and not `L2norm(leafᵢ)`, which is what leaves
+  the leaf's own notion of norm to the package that defines the leaf: `GO`'s
+  `l2norm(::AbstractLieAlgHorMatrix)` is over the lift's free parameters, where the generic
+  `L2norm(::AbstractArray)` would read the dense ``n \times n`` interface and count a skew block's
+  entries twice. A method moved upstream that stops calling back into the leaf's generic has silently
+  changed what it computes. `GO/test/optimizer_status_tests.jl` is where that is caught.
 - **`rebuild` takes a prototype, not a type.** Non-differentiable fields (`n`, `N`) come across for
-  free; `data` may have a different element type; and the concrete type cannot drift, which is D5's bug
-  class.
-- **A layout is a value**, not a closure: storable in an optimizer cache, comparable, inferable. This is
-  the concrete difference from `ParameterHandling`. It also subsumes `FlatSlice`, which
-  `SymbolicNeuralNetworks` used to define and has since deleted — see §8.
-- **Copies are range `copyto!`s**, so no element is ever indexed individually and GPU arrays work
-  unchanged — the failure documented at `GO/scripts/mnist_cuda.jl:5-15`.
-- **The HDF5 writer records key order** as a group attribute, which fixes D4 for new files. Older files
-  — `ANN`'s attribute-less groups, and GML's `gml_type` tagging — still load, the latter falling back to
-  the regex guess because they record nothing better.
-- **HDF5 loading has two paths**, because a file has no prototype to rebuild against: pass one
-  explicitly (`load(NetworkParameters, h5, prototype)`, needs no registration) or let the owning package
-  call `register_parameter_type!`. `parameter_metadata` exists for the second path and was not in the
-  original design — a prototype carries `n` and `N` across, but a file has to be told.
-- **`save`/`load`/`h5save`/`h5load` are not exported**, matching `AbstractNeuralNetworks`, since those
-  names collide with most of the ecosystem.
+  free, `data` may have a different element type, and the concrete type cannot drift — which is the
+  bug class that turned a `GrassmannManifold` into a `StiefelManifold` on every round trip before
+  the protocol existed.
+- **A layout is a value**, not a closure: storable in an optimizer cache, comparable, inferable.
+  This is the concrete difference from `ParameterHandling`.
+- **Copies are range `copyto!`s.** No element is ever indexed individually, so GPU arrays work
+  unchanged (`src/flatten.jl:43-44`).
+- **`unflatten` must be able to return a different element type from the parameters**
+  (`ForwardDiff.Dual`). A `Float64` buffer cannot be shared with a `Dual` view, so the flat form is
+  copied rather than aliased, with allocation-free in-place variants for inner loops.
+- **Every across-children walk is a `@generated` body that indexes the branch with `getfield` at
+  literal indices.** Never `values(·)`: it materialises a temporary tuple, free while the branch
+  stays in registers and not beyond, and past 32 children `Base` stops unrolling. Ten walks have had
+  this treatment. A new one starts there rather than arriving at it — and note that the *outer*
+  branch's width is what decides the cost, so a 48 × 2 set (a child per layer, which is what a deep
+  network is) pays where a 16 × 24 one does not.
+- **A `@generated` body may only call helpers defined above it in the file.** A generator runs in
+  the world age of its own method definition. Precompilation hides a violation by giving every
+  method in a module one world age, so `test/world_age_tests.jl` runs the walks in a subprocess
+  under `--compiled-modules=no`, which is the only way to ask.
+- **The HDF5 writer records key order** as a group attribute. Older files — `ANN`'s attribute-less
+  groups, `GML`'s `gml_type` tagging — still load, falling back to a regex guess that is guarded so
+  it leaves the order alone unless every key matches.
+- **Loading has two paths**, because a file has no prototype to rebuild against: pass one explicitly
+  (`load(NetworkParameters, h5, prototype)`, no registration needed) or let the owning package call
+  `register_parameter_type!`.
+- **`save`/`load`/`h5save`/`h5load` are not exported**, matching `AbstractNeuralNetworks`, since
+  those names collide with most of the ecosystem.
+- **A package cannot export a type sharing its own name** — the module binding wins at the `using`
+  site. Hence `NetworkParameters`, and hence one type with one name: `AbstractNeuralNetworks` 0.7
+  removed `NeuralNetworkParameters` outright rather than aliasing it, and
+  `ANN/test/parameters_seam_tests.jl` pins that the name is not even defined. 0.7.3 applied the same
+  rule the other way and renamed its own `ArrayNamedTuple` — network inputs and outputs — to
+  `NamedTupleOfArrays`, which says what the alias is about: a network's inputs and outputs. A set of
+  *parameters* is a `NetworkParameters` and not an alias of any kind, so `NamedTupleOfArrays` is the
+  only alias of that shape in the ecosystem. One name, one thing.
 
-### Verification
+## 4. Open work
 
-```bash
-julia --project -e 'using Pkg; Pkg.test()'                                            # 509 tests
-julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'   # doctests
+### 4.1 The `SimpleSolvers` 0.12 pin, upstream of everything here
 
-julia --project=. scripts/wide_branch_cost.jl    # D12/D13/D17/D20/D22/D23
-julia --project=. scripts/leaf_layout_cost.jl    # D21
-```
+**This is the one thing blocking the ecosystem, and it is outside all nine checkouts.**
+`GeometricIntegratorsBase` 0.6.3 declares `SimpleSolvers = "0.12.1 - 0.12"`, and
+`GeometricIntegrators` 0.17 inherits it. `GeometricOptimizers` 0.7.0 requires `SimpleSolvers` 0.13.2,
+because that is where three of the five upstreamed methods live. So:
 
-The sweep prints two shapes at every width, bare and inside a `NetworkParameters`, each in a process of
-its own (D20). **The two `layout` columns now agree on every Julia — about 1.05 s wrapped against 1.04 s
-bare at 369 children — and that is the reading rather than a warning.** Until 0.2.3 the wrapped column
-showed a cliff the bare one did not, about 13.4 s at 369 on Julia 1.11, and D21 is what that was. A
-cliff re-appearing there is the regression to act on.
+| consumer | held at | by |
+|---|---|---|
+| `NonlinearIntegrators` | `GeometricOptimizers` 0.5.0, `SimpleSolvers` 0.12.2, `NeuralNetworkParameters` 0.2.1 | its own `GeometricIntegratorsBase = "0.6.3"` dependency |
+| `GeometricMachineLearning`'s **test** environment | `GeometricOptimizers` 0.6.0, `SimpleSolvers` 0.12.2 | its test extra `GeometricIntegrators = "0.16 - 0.17"` |
 
-That leaves the fork itself to be checked some other way, since agreeing columns no longer distinguish
-a working fan-out from a broken one. Check it directly: `fan_out` `run`s one child process per row and
-each prints its own line, so `ps aux` during a run, or simply invoking one row on its own —
-`julia --project=. scripts/wide_branch_cost.jl --in-process wrapped 369` — is what says the isolation
-holds. A row run alone and the same row inside the sweep have to read the same.
+Neither of these is new — both were already pinned back before this wave — but 0.6.0 could still
+*resolve* against `SimpleSolvers` 0.12 and 0.6.1 cannot. `GeometricMachineLearning`'s own package
+dependencies are unaffected; only its test environment blocks, and only through that one extra.
 
-It also covers a **369-child branch** — the width of GMLDatasets' MNIST transformer, and the shape D12,
-D13 and D14 were about — through `flatten`/`unflatten`, `mapparameters` at both arities,
-`mapparameters!`, `foreachparameters` with and without the `nothing` skip, `foldparameters` and
-`foldstorage` at both arities, `parameter_eltype` and the `NetworkParameters` constructor that runs it,
-the `unflatten` pullback, and the in-place forms at zero allocations, and a 48-child one inside a
-`NetworkParameters` for the same round trip and the same zero allocations. The element-type assertions
-cover all four shapes — bare, positional and wrapped at both widths, a branch of branches at 48 —
-because D23 was paid on each of them and visible on only some. It asserts the properties and not the
-timings, because a wall-clock bound would be a flake on a loaded machine; the regression test is that
-the file *completes*, which before 0.2.2 it did not. It costs the suite about 45 s on Julia 1.13 and
-about 1 m 45 s on 1.11, all of it compilation at that width, and that is the price of covering the
-width a consumer has rather than the width that is convenient.
+**The fix is a compat widening in `GeometricIntegratorsBase` to `SimpleSolvers = "0.13"`, followed by
+one in `GeometricIntegrators`.** Nothing in this repository or its siblings can do it. Until then:
 
-The suite covers, beyond round trips: `Float32` fidelity (D6); zero allocation for `flatten!` and
-`unflatten!` — measured from inside a function, which is the claim that matters, an optimizer's inner
-loop rather than the top level of a testset; a structured leaf and a two-block leaf whose types
-survive the round trip (D5); scalar, empty and tuple leaves; `Dual`-valued
-unflattening; agreement between `ForwardDiff` on the flat form and `Zygote` on the structured one;
-Zygote through both conversions; a structurally-zero gradient block; the `nothing`-branch skip in the
-walks; ten-layer HDF5 key ordering (D4); both HDF5 load paths; and files in the two older formats.
+- `GML/test/reduced_system.jl` is the one test file that needs `GeometricIntegrators`. With it set
+  aside, `GeometricMachineLearning`'s suite passes in full against `GeometricOptimizers` 0.7.0 —
+  every optimizer test, every structured-parameter test, the HDF5 round trips and the docstring
+  examples. That is how this wave was verified.
+- `NonlinearIntegrators` cannot be tested against it at all, and does not need to be: nothing there
+  reaches any of the eight methods. Its `ShallowNet` and `DenseNet` both call
+  `NeuralNetworkParameters.flatten` and hand `Optimizer`, `OptimizerState` and `solve!` a plain
+  `Vector` (`NLI/src/nvi/shallownet.jl:114-131`, `NLI/src/nvi/densenet.jl:277-283`, `:351-362`), so
+  §4.3.1's narrowing does not reach it either — the `AbstractVector` member of `OptimizerSolution` is
+  untouched. `GradientAutodiff(F, ::NamedTuple)` — the one upstreamed method it does name, in a
+  comment — is named as the thing it *avoids*.
 
-## 7. Why not an existing package
+  Its `Project.toml` still says `GeometricOptimizers = "0.6"`, and that will have to become
+  `"0.6, 0.7"` when §4.1 unblocks. It is deliberately **not** widened now: the change is justified by
+  inspection and cannot be justified by a run, because the environment does not resolve, and an
+  untested compat entry is the kind of status claim §7 is about.
 
-**ParameterHandling.jl**, the tempting choice since `GeometricOptimizers` already depends on it, fails
-on four counts, each one something GO has hit in practice:
+### 4.2 Goal 3 — duplication
+
+Nothing is left to consolidate. One item is kept on purpose, and it is listed as a decision so that
+it is not mistaken for outstanding work — three earlier revisions of this file filled this slot with
+work that was already done.
+
+`GML`'s `_tree_optim_step!` (`GML/src/optimizers/optimizer.jl:293`) stays hand-written, and the
+comment above it at `:270-292` says why. `foreachparameters` cannot serve it for two reasons, both
+load-bearing: the recursion is keyed on the *cache* tree and stops where the cache stops, so a
+layer's `NamedTuple` arrives whole rather than being descended into; and `λY` is *broadcast* rather
+than zipped, one `GlobalSection` standing in for a whole subtree. That is a different walk, not a
+copy of this one.
+
+`SNN`'s untracked `GMLPLAN.md` is kept as an untracked file, deliberately. The work it describes —
+rewriting `SNN/docs/src/guide/training.md` against `GeometricOptimizers` instead of
+`GeometricMachineLearning`, so that `SNN/docs/Project.toml` resolves again — is **not** done, and
+`SNN/docs/Project.toml` still carries `GeometricMachineLearning = "0.6"` and a comment saying the
+environment does not resolve. Note that its premise has moved on: the blocker it names is a
+`GeometricMachineLearning` release tracking the 0.2 container, and the blocker today is §4.1.
+
+### 4.3 Housekeeping
+
+- **`GeometricOptimizers` has 129 method ambiguities**, which is what keeps `GO/test/aqua_tests.jl`
+  at `test_piracies` rather than `test_all`. **26 of them have both methods owned by that package**,
+  and one of those is in the `copyto!` family. All 26 are between that package's structured matrices
+  (`SymmetricMatrix`, `SkewSymMatrix`, the triangulars, `StiefelProjection`) and
+  `LinearAlgebra`/`ArrayLayouts` methods on `AbstractMatrix` — `*`, `+`, `mul!`, `vcat`, `hcat`. None
+  came from the de-piracy work. Re-measure with
+  `Test.detect_ambiguities(GeometricOptimizers; recursive = true)` rather than trusting these figures;
+  the 0.7.0 changelog holds the reading they came from.
+
+  **The report is not a work list.** A reported pair may intersect only at a shape nothing can build,
+  so the way to triage one is `typeintersect` on the two signatures and then an attempt to construct a
+  witness. The one surviving `copyto!` pair is documented in place on exactly that basis. Prefer
+  removing the *cause* to documenting the pair and prefer documenting it to adding a disambiguator: a
+  method that exists only to satisfy a static checker is one somebody later has to reason about.
+
+- **`GeometricBase`'s extension is asserted in `GeometricOptimizers`, not in `GeometricBase`.** Its
+  test environment would have to resolve `NeuralNetworkParameters`, whose floor is Julia 1.11, while
+  `GeometricBase` still supports 1.10 and tests on it. `GO/test/aqua_tests.jl` carries the
+  `which`-assertion instead, where both are hard dependencies. If `GeometricBase` ever moves to 1.11
+  the assertion should move with it — that is the only reason to.
+- **`GeometricOptimizers` 0.6.1 changed what `gradient(opt)` returns** for a parameter set: a
+  `RiemannianGradient` wrapping the `GradientAutodiff` rather than the `GradientAutodiff` itself. A
+  downstream `isa` check on the inner type has to reach through `.gradient`. `GML` does not do this —
+  it builds its own `_GMLGradient` and calls `GeometricOptimizers.update!` directly, never going
+  through `Optimizer` — but it is the one visible behaviour change in the release.
+
+### 4.3.1 The parameter type, and what is left of it
+
+**There is one type for a whole set of parameters and it is `NetworkParameters`.** `ParameterSet` is
+removed; `GeometricOptimizers`' `ArrayNamedTuple` and `ParameterContainer` are removed. Nothing in this
+package is a `Union` alias any more. The measurements and the before/after counts live in each
+package's changelog, which is where a record belongs.
+
+An earlier revision of this section concluded the opposite — that `ParameterSet` had to stay wide
+because `SymbolicNeuralNetworks` dispatched equation sets on it. That was true and was not the binding
+constraint. Narrowing it and running the four suites put **48 of 51** failures on one method,
+`AbstractNeuralNetworks`' `applychain`, and `SNN` behind it. The rule this cost: **when a shared name
+has several consumers, the one that is hardest to argue about is not necessarily the one holding it
+up. Narrow it and read the failures.**
+
+What the narrowing turned up, none of which was visible from the signatures:
+
+- **The reverse pass is why a bare `NamedTuple` reaches a network at all.**
+  `ext/ZygoteRulesExt.jl` seeds the pullback with the *wrapped* `NamedTuple` rather than the container,
+  because that is what yields a tangent keyed by the layers instead of a tangent for the wrapper's one
+  field. So a function differentiated with respect to a parameter set is *called* with a `NamedTuple`.
+  That is why `applychain` keeps a `NamedTuple` method and why the losses take `ps` untyped.
+
+  Making the wrap differentiable instead — so that `f` always sees a container — was tried and
+  reverted. It collides with a set whose sole layer is named `params`: there the container tangent and
+  the structural tangent are indistinguishable by shape, and the unwrap and `_rewrap` would have to
+  resolve the ambiguity in opposite directions. `test/derivative_tests.jl` pins that case, and it is
+  the reason the seam stays where it is.
+
+- **A flat set is one cache's worth, not a tree.** `GeometricMachineLearning` asked "is this a
+  container?" before "is this one cache's worth?", which was invisible while a flat set arrived bare.
+  Wrapped, it descended and gave every weight its own cache — and a bare `Manifold` then reached
+  `_GMLGradient`, ambiguous against `GeometricOptimizers`' own `Gradient` functor. The branch order is
+  reversed and `_is_layer` accepts either carrier.
+
+- **`SymbolicNeuralNetworks` has `EquationSet` back**, and it is the right outcome rather than a
+  regression. An equation set is a keyed bundle of symbolic expressions a caller writes; a parameter
+  set is what a network is evaluated at. The consolidation that removed the name merged two concepts on
+  the strength of a shared shape. Where both genuinely arrive — a symbolic *gradient* is
+  parameter-shaped and holds expressions — there are two methods sharing a body.
+
+**What replaced the union, generally.** Where two shapes genuinely reach one function, it now has two
+methods, each naming its own shape, rather than one signature over an alias. That is more lines and
+less reach: an alias silently admits everything of that shape everywhere it is used, where a method
+says which caller it is for. The remaining pairs are `applychain`, `changebackend`, `_is_decayable`,
+`_get_contents`, `flatten_equations`, `flatten_gradient`, `build_nn_function` and
+`symbolic_parameter_gradient` — eight, each with a comment giving its reason.
+
+**Union aliases left in the ecosystem**, none of them about parameters:
+
+| package | aliases |
+|---|---|
+| `NeuralNetworkParameters` | none |
+| `AbstractNeuralNetworks` | `ArrayOrNamedTuple`, `NeuralNetworkBackend` |
+| `SymbolicNeuralNetworks` | `SymbolicExpression`, `SymbolicVariables` |
+| `GeometricOptimizers` | `OptimizerSolution`, `GradientStorage`, `LiftOrParameters`, `DottableSet`, `GlobalSectionSingleOrNamedTuple`, `VectorStorageMatrix`, `AdamFamily`, `FirstOrderMethodWithState` |
+| `GeometricMachineLearning` | `QPTOAT`, `SymplecticDimensionChange` |
+
+**The next simplification of this kind.** The section aliases — `GlobalSectionTuple`,
+`GlobalSectionNamedTuple`, `GlobalSectionSingleOrNamedTuple` — are the remaining `NamedTuple` aliases
+in `GeometricOptimizers`, and they are what its three `_copyto!` methods on a bare `NamedTuple` exist
+for. Collapsing them means making `GlobalSection(::NetworkParameters)` return a *container* of sections
+rather than the plain tree it returns today, which needs a `parameter_eltype` for a `GlobalSection`
+here and changes what `GML`'s `_tree_optim_step!` descends into — `_is_section_tree` is where that
+would land. Nothing is blocked on it.
+
+### 4.4 Performance verification across Julia 1.11, 1.12 and 1.13
+
+**Done for 0.2.5, on 2026-08-28.** A/B of `NeuralNetworkParameters` 0.2.4 against 0.2.5 with
+everything else held fixed — `GeometricOptimizers` 0.6.0 (a clean worktree at the release commit, so
+that this measures 0.2.5 and not the 0.6.1 work), `GeometricBase` 0.14.9, `SimpleSolvers` 0.13.1 —
+one Julia at a time, on an Apple M4 Max. The toggle is the change and not two different inputs.
+
+**Nothing regresses, and the run-time side does not move at all.**
+`GO/scripts/optimizer_allocations.jl` is **byte-for-byte identical** between the two on all three
+versions, which is the expected shape: 0.2.5's fix was a `@generated` promotion body, so it is
+compile time and nothing else.
+
+`solve!`, 20 iterations, bytes allocated — identical under 0.2.4 and 0.2.5:
+
+| | Julia 1.11 | Julia 1.12 | Julia 1.13 |
+|---|---|---|---|
+| `BFGS` `Vector` | 22 536 | 22 520 | 22 600 |
+| `BFGS` `Manifold` | 1 056 760 | 1 055 432 | 1 055 448 |
+| `BFGS` `NamedTuple` | 1 559 832 | 1 558 456 | 1 558 472 |
+| `BFGS` container | 1 566 072 | 1 564 696 | 1 564 712 |
+| `DFP` container | 1 556 456 | 1 555 080 | 1 555 096 |
+
+The compile-time side improves where 0.2.5 said it would and nowhere else. First-call seconds, 0.2.4
+→ 0.2.5:
+
+| harness, row | 1.11 | 1.12 | 1.13 |
+|---|---|---|---|
+| `leaf_layout_cost.jl`, 369 flat, bare | 1.04 → 0.97 | 1.07 → 1.03 | 1.06 → 0.99 |
+| `leaf_layout_cost.jl`, 369 flat, wrapped | 1.04 → 0.95 | 1.08 → 1.08 | 1.07 → 0.99 |
+| `leaf_layout_cost.jl`, 16 × 24 nested, bare | 0.88 → 0.83 | 0.63 → 0.62 | 0.59 → 0.54 |
+| `walk_compile_cost.jl`, `parameterlayout`, flat bare | 1.03 → 1.03 | 1.15 → 1.03 | 1.06 → 1.01 |
+| `walk_compile_cost.jl`, `parameterlayout`, nested wrapped | 0.87 → 0.88 | 0.67 → 0.62 | 0.58 → 0.54 |
+| `walk_compile_cost.jl`, `NetworkParameters(·)`, nested bare | 0.19 → 0.18 | 0.13 → 0.08 | 0.19 → 0.11 |
+
+`wide_branch_cost.jl` is a wash at every width and both shapes on all three versions, and every
+allocation column reads **0** — including 0.2.5's new `parameter_eltype` column, which is the one the
+release added. `adam_cache_attribution.jl` is a wash too, every row within 3 %.
+
+The two `layout` columns agree, which is the reading §6 asks for: 0.97/0.95 on 1.11, 1.03/1.08 on
+1.12, 0.99/0.99 on 1.13. And `GO`
+[#73](https://github.com/JuliaGNI/GeometricOptimizers.jl/issues/73)'s baseline holds — the tree
+column stays at 0 B, which `GO/test/flat_buffer_allocations.jl` asserts and which passed in the full
+`GO` run.
+
+**One methodology defect fell out of this and is fixed.** A row of `leaf_layout_cost.jl` reported
+**-1.4 s**, where two re-runs read 0.53. `first_call` used `time()`, the wall clock, which steps when
+the system adjusts it. All five harnesses across the two repositories now use `time_ns()`: a negative
+reading is at least obvious, and a small positive step in the other direction would not have been.
+§6 records the rule.
+
+**The rule stands for the next release.** Every release after 0.2.5 takes its predecessor as the
+baseline on the same terms, reported as three columns, and small regressions on 1.11 are acceptable
+if 1.12/1.13 improve.
+
+## 5. Why not an existing package
+
+**ParameterHandling.jl** fails on four counts, each one something `GeometricOptimizers` hit in
+practice before dropping it:
 
 1. Its `flatten(::Type{T<:Real}, x)` methods cover the Base types, so extending it for `Float32`
-   fidelity *is* piracy. `GO/…/named_tuple_wrapper.jl:25-29` says so, citing issue #16.
+   fidelity *is* piracy.
 2. `unflatten` is a chain of closures: not type stable, not storable, not comparable.
-3. `flatten(x)` defaults to `Float64` (D6).
-4. No GPU method — a `CuVector` falls through to the element-mapping `AbstractVector` path
-   (`GO/scripts/mnist_cuda.jl:5-15`).
+3. `flatten(x)` defaults to `Float64`, silently promoting a `Float32` network.
+4. No GPU method — a `CuVector` falls through to the element-mapping `AbstractVector` path.
 
 It also cannot round-trip a `VectorStorageMatrix` at all, which GO's own docstring spells out
-(`vector_storage_matrix.jl:18-20`): the `AbstractMatrix` method reshapes the flat vector back to
-``n \times n``, and ``n(n\pm1)/2`` numbers do not reshape to that. And it pulls `IterTools`,
-`LogExpFunctions`, `InverseFunctions` and — oddly — `Test` as hard dependencies.
+(`GO/src/special_matrices/vector_storage_matrix.jl:18-20`): the `AbstractMatrix` method reshapes the
+flat vector back to ``n \times n``, and ``n(n\pm1)/2`` numbers do not reshape to that. And it pulls
+`IterTools`, `LogExpFunctions`, `InverseFunctions` and — oddly — `Test` as hard dependencies.
 
-**ComponentArrays.jl**: leaves come back as `ReshapedArray`/`SubArray` views, which cannot represent the
-structured types, and there is nowhere for their non-array fields (`n::Int`, `N::Int`). Adds
+**ComponentArrays.jl**: leaves come back as `ReshapedArray`/`SubArray` views, which cannot represent
+the structured types, and there is nowhere for their non-array fields (`n::Int`, `N::Int`). Adds
 `ArrayInterface` and `StaticArrayInterface`.
 
-**Optimisers.jl `destructure`**: lean, and it handles parameter tying, but it drags in the optimiser-rule
-machinery `GeometricOptimizers` exists to replace, and `Functors.fmap` would need teaching the
-structured types anyway — the same extension work plus a dependency.
+**Optimisers.jl `destructure`**: lean, and it handles parameter tying, but it drags in the
+optimiser-rule machinery `GeometricOptimizers` exists to replace, and `Functors.fmap` would need
+teaching the structured types anyway — the same extension work plus a dependency.
 
-## 8. Where each package stands
+## 6. How to measure here
 
-### `AbstractNeuralNetworks` 0.7.1 — done
+```bash
+julia --project -e 'using Pkg; Pkg.test()'
+julia --project=docs -e 'using Pkg; Pkg.develop(path="."); include("docs/make.jl")'
 
-The container moved. `src/parameters.jl` and the whole `ext/` directory are gone; the package depends
-on this one (`Project.toml:10`, compat `:19`) and imports the five names it extends or reaches through
-(`src/AbstractNeuralNetworks.jl:32-33`). `changebackend` is one `mapparameters` call
-(`src/utils/changebackend.jl:16-18`), which also gave it the `Tuple`-branch case the two methods it
-replaces did not have; `_statify` is another (`src/static_cpu_backend.jl:30`). D7's generic `pullback`
-moved here. `test/parameters_tests.jl` and `test/parameters_hdf5_tests.jl` became
-`test/parameters_seam_tests.jl`, which tests the seam rather than the container.
+julia --project=. scripts/wide_branch_cost.jl    # the walks, both shapes, six widths
+julia --project=. scripts/leaf_layout_cost.jl    # the layout type's own cost
+```
 
-**`ParameterSet` replaced eight inline unions** (`chain.jl:52`, `model.jl:35`, `losses.jl:90,95,99`,
-`static_cpu_backend.jl:30`, `utils/changebackend.jl:16`). Note that ANN's own `ArrayNamedTuple`
-(`src/utils/array_named_tuple.jl:23`) is a *different* thing and stays: it is about network inputs and
-outputs rather than parameters, and it is the one name it shares with `GeometricOptimizers` by
-coincidence. Worth renaming to leave `ArrayOrNamedTuple` alone as the only name there, but that is
-cosmetic and not done.
+Rules, each of which cost a wrong committed figure to learn:
 
-**The compatibility alias was deliberately not added.** Earlier drafts of this section called for
-`const NeuralNetworkParameters = NetworkParameters` and a re-export, and listed the downstream uses it
-would have to support. 0.7 removed the name outright instead, so that one type has one name across the
-ecosystem — `src/AbstractNeuralNetworks.jl:24-27` says so, and
-`test/parameters_seam_tests.jl:16-25` pins it by asserting the name is not even defined. Every call
-site the survey found now names `NetworkParameters`: `src/chain.jl:52,57` and
-`src/neural_network.jl:12,32-35` here, `SNN/src/codegen/equation_sets.jl:35,72`,
-`GML/src/GeometricMachineLearning.jl:8` and `NLI/src/NonlinearIntegrators.jl:47-53`. The two SNN sites
-that used to build the container by keys went further and no longer build one at all: the nested walk
-in `SNN/src/derivatives/derivative.jl:26` is `mapparameters`.
+- **One process per row, cold.** A sweep in one session reads what the previous row compiled.
+  `wide_branch_cost.jl` forks per (shape, width); `--in-process` exists for running one row alone,
+  which is also how to check the fan-out is really forking — a row run alone and the same row inside
+  the sweep have to read the same.
+- **Time the first call through `Base.invokelatest`.** Compiling the harness function infers through
+  a direct call, so the inference being timed is spent before the clock starts.
+- **Time it on `time_ns()` and not on `time()`.** `time()` is the wall clock and steps when the
+  system adjusts it; §4.4's sweep produced a reported **-1.4 s** that way. `time_ns()` is monotonic,
+  so a row is the elapsed time or it is nothing.
+- **Measure the shape a consumer holds** — bare `NamedTuple` *and* inside a `NetworkParameters`. The
+  two entry points reach `parameterlayout` through different methods. The two `layout` columns
+  agreeing (about 1.0 s at 369 children on every Julia) is the reading; a cliff re-appearing in the
+  wrapped column is the regression to act on.
+- **A `Vararg` walk needs a zero-argument closure.** `@allocated f(a, b)` lowers to
+  `Base.allocated(f, a, b)`, whose own splat allocates, so the walk's own figure is invisible
+  otherwise.
+- **Assert `@allocated` as a bound, not an equality.** It reports the process-wide counter over its
+  window, and Windows CI jitters tens of bytes in both directions. Pick a bound that separates the
+  jitter from the defect by orders of magnitude.
+- **Two columns earn their keep by making a difference visible, not by explaining it.** A gap
+  between two measurements is where to look, not what to conclude.
 
-### `SymbolicNeuralNetworks` 0.7.0 — done, and more than was asked
+The suite is about 45 s on Julia 1.13 and 1 m 45 s on 1.11, nearly all of it compiling the 369-child
+case — the width of GMLDatasets' MNIST transformer, which is the width a consumer has rather than
+the width that is convenient. It asserts properties and not timings, because a wall-clock bound
+would flake on a loaded machine; the regression test is that `test/wide_branch_tests.jl`
+*completes*.
 
-**`EquationSet` is gone.** It was `Union{NamedTuple, NetworkParameters}`, and this was the only package
-in the ecosystem to have given that union a name — which is why `ParameterSet` is named after the shape
-rather than after the contents. `EquationSetFunction` and `EquationSetArrayFunction` keep their names;
-they are named for what they carry.
+Beyond round trips it covers: `Float32` fidelity; zero allocation for the in-place walks measured
+from inside a function, at every width, depth and arity; a structured leaf and a two-block leaf
+whose types survive the round trip; scalar, empty and tuple leaves; `Dual`-valued unflattening;
+agreement between `ForwardDiff` on the flat form and `Zygote` on the structured one; a
+structurally-zero gradient block and a set the reverse pass never touched; the `nothing`-branch
+skip; HDF5 key ordering, both load paths, and files in the two older formats.
 
-Earlier drafts said this package needed no change, on the grounds that its `flatten_equations` solves a
-different problem. That was half right: restoring batch dimensions is still its own
-(`unflatten_batch(::LeafLayout, ::AbstractMatrix)`, `src/codegen/equation_sets.jl:192`), but the
-*layout* was not. `FlatSlice` is gone, and `flatten_equations` is one line over this package —
-`flatten(Num, mapparameters(scalar_expressions, eqs))` (`:146`) — with `split_result` dispatching on
-`ParameterLayout` (`:159-160`). The design point in §6 that called `ParameterLayout` a generalisation
-of `FlatSlice` turned out to be the plan for a package this document said to leave alone.
+**Two durable measurements**, so they need not be re-derived:
 
-### `GeometricOptimizers` 0.5.0, and 0.6.0 on the branch — done
+- **Flattening is cheap.** 1.3M parameters, five 512-wide dense layers, `Float64`: `flatten` 0.144
+  ms, `flatten!` into a preallocated buffer 0.133 ms, `unflatten` 0.149 ms — against 0.946 ms for
+  one forward pass at batch 32. A round trip is about 10 % of a single forward pass.
+- **Reshaped views keep the BLAS fast path**, so the argument against shared storage is element type
+  and not speed: `reshape(view(v, r), m, n)` is a `StridedArray` and `mul!` runs at 0.089 ms either
+  way. The decisive constraint is the `Dual` case in §3.
 
-All three steps this section used to set out have shipped, and not in the order it predicted.
+## 7. Revising this file
 
-**Steps 1 and 2 shipped together in 0.5.0**, as one breaking release rather than the patch this section
-proposed: `ParameterHandling` is gone, `ext/NeuralNetworkParametersExt.jl` supplies the whole leaf
-protocol for GO's structured matrices, the flat buffers are preallocated on the quasi-Newton caches, and
-`NetworkParameters{T}` is a member of `OptimizerSolution{T}`. D5 and D6 went with it: `rebuild` takes a
-prototype, so the concrete type cannot drift, and `flatten(ps)` takes its element type from the
-parameters.
+The failure mode on record, five times over, is a status claim that was true when it was written.
+Three specific traps:
 
-**Step 3 is the 0.6.0 branch** (#68 and #69). The elementwise primitives and the ~40 sites around them
-take a container, and a nested container now runs `solve!`, `BFGS` and `DFP` — which is what this
-section meant by "the swap". Two things it predicted came out differently:
+- **Check the tree, not the pull request.** GO's #68 and #69 bodies describe the state *before* the
+  commits inside them; three entries were recorded as open on that basis after they had been fixed.
+- **A design claim is worth what the last consumer that tried to use it found.** "One implementation
+  covers all of them" was true in intent and false in practice for two years of releases, and the
+  package that noticed was the one that had to write its own walk instead.
+- **A count is not a property.** This file listed four piracy sites, and a fifth it was unsure about,
+  where `Aqua.Piracy.hunt` found eight. The list was not merely short — GO's own audit had it wrong
+  in *both* directions at once, recording two as open after they were fixed. Where a tool can decide
+  the question, cite the tool and delete the list; where none can, expect the list to be wrong.
 
-- **The trap did not fire.** This section warned that adding `NetworkParameters` to `OptimizerSolution`
-  would invert GML's `_use_go_cache` test and `MethodError` on the first training step. GML had already
-  put the `NetworkParameters` branch *ahead* of `_use_go_cache` in anticipation, so the inversion is
-  harmless. What was wrong was the comment beside it, which still said the ordering was invisible —
-  0.5.0 had made it load-bearing a release earlier. Corrected in GML.
-
-- **#16 is not closed, but one of its five sites is gone.** Closing the group needs the `NamedTuple`
-  methods *removed*, and they cannot be: GML hands GO one bare layer `NamedTuple` per layer, and
-  GMLDatasets' MNIST scripts pass a flat `NamedTuple` directly. But `outer!` on a parameter set turned
-  out to be *internal* to the quasi-Newton caches once #69 routed it through the flat buffers — no
-  consumer calls it — so it could simply be deleted. That is the distinction to apply to the other four:
-  ask whether a consumer reaches the generic, not whether the signature is pirated.
-
-**What `ParameterContainer{T}` is for, and why `ParameterSet` does not replace it.** GO keeps a narrower
-alias, `Union{ArrayNamedTuple{T}, NetworkParameters{T}}`, and it has to. `T` means two different things
-across it — for `ArrayNamedTuple{T}` a guarantee that every leaf is an `AbstractArray{T}` *and* that the
-set is flat, for `NetworkParameters{T}` a promotion over leaves at any depth — so it is the right type
-exactly where `T` also appears elsewhere in the signature, beside a `Matrix{T}` or an `f̄::T`, and the
-wrong type everywhere else. The sixteen sites that had to fall back to the inline union are the
-measurement of that, and they take `ParameterSet` now.
-
-**There is no remainder. Three things this section listed as outstanding had already been done**, all
-three in GO commit `b4c710c`, which landed inside #69 rather than #68 — which is why reading the two
-pull request bodies does not find them:
-
-- **`src/parameter_walks.jl` is deleted** and `_mapleaves`/`_mapleaves!` are `mapparameters`/
-  `mapparameters!` at 44 call sites. This section said the file "can go" once D12 was fixed; it went.
-- **The `_as_walkable` catch-all is answered, and the answer is stronger than the question.** This
-  section had it as an open question — a tree zipped against something that is neither a branch nor
-  `nothing` walks there and raises here — with the implication that the catch-all might be a capability
-  worth keeping. It was not. `map` over a `NamedTuple` and a bare `Vector` matches neither of Base's
-  specific methods, falls through to the generic iterator `map`, and zips the branch's *entries*
-  against the leaf's *elements*: `map(f, (a = [1.0], b = [2.0]), [9.0, 9.0])` returns
-  `[([1.0], 9.0), ([2.0], 9.0)]`, and a leaf shorter than the branch is silently truncated. So the
-  catch-all turned a caller's bug into a wrong answer where `_as_namedtuple`'s three exhaustive methods
-  raise a `MethodError` naming the type. Deleting the file fixed a latent bug of GO's own.
-- **The pirated `l2norm`s are gone**, upstream. `l2norm(::AbstractMatrix)` and
-  `l2norm(::AbstractFloat)` were piracy on *Base* types; `GeometricBase` 0.14.9 takes
-  `L2norm(x::AbstractArray)`, which is the matrix method with the `vec` removed, and its
-  `L2norm(x::Real) = x^2` had always given `abs` for the second. GO's `Project.toml` pins `0.14.9` for
-  it. Removing the `vec` was not only ownership: `vec` of a `Matrix` allocates a 32-byte wrapper, so
-  `l2norm` of a parameter set had cost 32 bytes per matrix leaf on every stopping criterion of every
-  iteration.
-
-**One thing to carry back into D13 and D17.** GO 0.6.0's allocation table reported a 20-iteration
-`solve!` going from 2 431 912 bytes to 1 559 832 on its flat `NamedTuple` problem and read the whole of
-it as its own flat-buffer work. It is not: its 0.5.0 column resolved **0.2.1** and its 0.6.0 column
-0.2.2, so **737 840 of those 872 080 bytes are D13 and D17** and 134 240 are GO's. Verified by pinning
-0.2.1 against GO's own 0.5.0 worktree, which returns the old column byte for byte. Corrected in GO with
-a three-column table holding the dependency fixed. Worth knowing here because it is the largest measured
-consequence either defect has, and neither entry above records one.
-
-**§3's lesson, a third time in one revision.** Three entries of the defect table were stale when that
-revision began — D3, half of D8, D11 — all recorded as open after `GeometricOptimizers` 0.5.0 and
-`GeometricMachineLearning` 0.6.0 had fixed them. These three are the same failure in the same
-direction, and they survived a revision that had just written the lesson down. The specific trap here
-is worth naming because it is not the general one: **the work was done in a commit under a pull request
-whose body describes the state before it.** #68's body still argues for keeping `_mapleaves` and cites
-GO's issue D9 as the reason; #69's body does not mention the walk at all. A status claim checked against
-the pull requests rather than against the tree gets all three of these wrong.
-
-### `GeometricMachineLearning` 0.6.1 — done
-
-`ext/HDF5Ext.jl` is **86 lines** and defines no `h5save` and no `changebackend`: it is `save`/`load`
-entry points dispatching on GML's own `NeuralNetwork`, delegating the traversal here.
-`_natural_sort_keys` is gone (D4), the pirated `h5save` is gone (half of D8), and the five
-`changebackend` methods moved to `GO/ext/AbstractNeuralNetworksExt.jl` in GO 0.5.0, which closed D3
-and the other half of D8. `GlobalSection(::NetworkParameters)` went the same way, closing D11. The
-package depends on this one (`Project.toml:19`) and re-exports `NetworkParameters`
-(`src/GeometricMachineLearning.jl:106`).
-
-**`ParameterSet` replaced fifteen inline unions**, across `loss/`, `optimizers/optimizer.jl`,
-`pullbacks/zygote_pullback.jl` and `data_loader/optimize.jl`.
-
-**What remains, and it is one thing kept on purpose.** `src/map_to_cpu.jl` is one `mapstorage` call;
-`apply_toNT` and `_eltype` are gone. The step dispatcher `_tree_optim_step!`
-(`src/optimizers/optimizer.jl:270-292`) stays hand-written, and now says why: it recurses on the
-*cache* tree and stops where the cache stops, so a layer's `NamedTuple` reaches `_leaf_optim_step!`
-whole, which is what one `GeometricOptimizers` cache is for; and `λY` is broadcast rather than zipped,
-one `GlobalSection` standing in for a whole subtree. `foreachparameters` does neither. Three earlier
-revisions of this section listed `map_to_cpu`, `apply_toNT`/`_eltype` and the `changebackend` methods
-here after they had been done.
-
-The comment on `_make_optimizer_cache`'s branch ordering was **wrong for a release** and is corrected:
-it said the ordering was invisible because `NetworkParameters` is not one of the types
-`OptimizerSolution` unions, and GO 0.5.0 had made it one, so the ordering is load-bearing. The code
-was already right; only the comment was not.
-
-### `NonlinearIntegrators` 0.4.1 — a consumer
-
-Not a target of any phase, but it pins both this package (`Project.toml:16`) and
-`AbstractNeuralNetworks = "0.7"` (`:26`), and reaches for `NetworkParameters` directly
-(`src/NonlinearIntegrators.jl:47-53`, used in `src/nvi/`). It is here so the version table above is
-the whole set of packages a change to this one has to consider.
+So: before this file is next revised, `grep` every `file:line` it cites, `gh issue view` every issue
+number, and check the version table against `Project.toml` and `git branch --show-current` in all
+nine checkouts. Anything that reads as finished comes out.

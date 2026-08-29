@@ -1,10 +1,11 @@
 name = "NeuralNetworkParameters"
 uuid = "67f4d93a-60e9-472b-8cdd-1ccf6005724a"
-version = "0.2.5"
+version = "0.3.0"
 authors = ["Michael Kraus <michael.kraus@ipp.mpg.de> and contributors"]
 
 [deps]
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+GeometricBase = "9a0b12b7-583b-4f04-aa1f-d8551b6addc9"
 
 [weakdeps]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
@@ -17,6 +18,7 @@ ZygoteRulesExt = "ZygoteRules"
 [compat]
 ChainRulesCore = "1"
 ForwardDiff = "0.10, 1"
+GeometricBase = "0.14.9"
 HDF5 = "0.17"
 SafeTestsets = "0.1"
 Test = "1"
