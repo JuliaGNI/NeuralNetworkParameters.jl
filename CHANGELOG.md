@@ -56,7 +56,7 @@ a rename, and both are recorded in their own changelogs:
 
 ### Added
 
-- **`ext/GeometricBaseExt.jl`**, holding `L2norm` over a parameter set, from which the generic
+- **`src/norms.jl`**, holding `L2norm` over a parameter set, from which the generic
   `l2norm(x) = sqrt(L2norm(x))` follows. It comes from `GeometricBase`, which cannot test it:
   `GeometricBase` supports Julia 1.10 and this package requires 1.11, so a test environment there
   cannot resolve this package, and the assertion had been parked in `GeometricOptimizers` — two
@@ -65,10 +65,15 @@ a rename, and both are recorded in their own changelogs:
   method's correctness rests on the leaf protocol and `foldparameters`, which are this package's.
   `test/geometric_base_tests.jl` covers it, including that the fold calls each leaf's *own* `l2norm`.
 
-  `GeometricBase` is a weak dependency and its own sole dependency is `Unicode`, so this costs nothing
-  to a caller who does not load it. It also takes `GeometricBase` out of the ecosystem's registration
-  chain: the 0.14.10 that existed only to carry this extension is withdrawn, and 0.14.9 is registered
-  and unchanged.
+  **`GeometricBase` is a hard dependency for it**, and not a weak one. It was written as
+  `ext/GeometricBaseExt.jl` first, on the reasoning that an extension costs nothing to a caller who
+  does not load `GeometricBase` — but almost everything in this ecosystem loads it anyway, and its own
+  sole dependency is `Unicode`, so what the extension actually bought was a method whose availability
+  a reader has to reason about. In the main module it is simply there.
+
+  It also takes `GeometricBase` out of the ecosystem's registration chain: the 0.14.10 that existed
+  only to carry this method as an extension *there* is withdrawn, and 0.14.9 is registered and
+  unchanged.
 
 ## [0.2.5] — 2026-08-27
 

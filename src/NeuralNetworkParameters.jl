@@ -25,10 +25,19 @@ interface, a manifold element, a horizontal lift — plug in through two methods
 support, is written against that protocol rather than against a list of types.
 
 Loading `HDF5` brings in [`save`](@ref) and [`load`](@ref) through a package extension.
+
+`GeometricBase.L2norm` of a whole parameter set is here rather than behind an extension, because
+most of this ecosystem depends on `GeometricBase` already and its own sole dependency is `Unicode`.
+See [`L2norm`](@ref).
 """
 module NeuralNetworkParameters
 
 using ChainRulesCore
+
+# `import` and not `using`: these two are `GeometricBase`'s functions and `src/norms.jl` adds a method
+# to one of them. `l2norm` is imported as well because that is what the fold calls at each leaf, and a
+# downstream package's method for a structured leaf is the one that has to be reached.
+import GeometricBase.Utils: L2norm, l2norm
 
 export NetworkParameters, params
 
@@ -58,6 +67,8 @@ include("flat_parameters.jl")
 export register_parameter_type!
 
 include("io.jl")
+
+include("norms.jl")
 
 include("derivatives.jl")
 

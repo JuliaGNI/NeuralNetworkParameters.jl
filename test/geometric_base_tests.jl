@@ -1,9 +1,9 @@
-# `GeometricBase.L2norm` over a parameter set, which `ext/GeometricBaseExt.jl` supplies.
+# `GeometricBase.L2norm` over a parameter set, which `src/norms.jl` supplies.
 #
 # This file exists because it *can*: the method dispatches on this package's type and walks this
 # package's leaf protocol, so this is the package that breaks it and therefore the package that has to
-# catch it. `GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so an
-# extension living there is one nobody can exercise.
+# catch it. `GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so a method
+# living there is one nobody can exercise.
 
 using GeometricBase
 using GeometricBase.Utils: L2norm, l2norm
@@ -11,12 +11,16 @@ using NeuralNetworkParameters
 using NeuralNetworkParameters: NetworkParameters, flatten
 using Test
 
-@testset "the extension loads and owns the method" begin
-    ext = Base.get_extension(NeuralNetworkParameters, :GeometricBaseExt)
-    @test ext isa Module
-
+# The method is in the main module and not behind an extension, so it is there for anyone who has
+# loaded this package -- there is nothing to trigger. `GeometricBase` is a hard dependency, which most
+# of this ecosystem takes anyway and whose own sole dependency is `Unicode`.
+@testset "the method is this package's own" begin
     ps = NetworkParameters((L1 = (W = [3.0 0.0; 0.0 4.0], b = [0.0, 0.0]), L2 = (W = [0.0 0.0], b = [12.0])))
-    @test which(L2norm, Tuple{typeof(ps)}).module === ext
+    @test which(L2norm, Tuple{typeof(ps)}).module === NeuralNetworkParameters
+
+    # ... and it is not piracy, which is what makes that legal: `L2norm` is `GeometricBase`'s, but the
+    # argument type dispatched on is this package's, and one owned side is enough.
+    @test which(L2norm, Tuple{typeof(ps)}).sig.parameters[2] === NetworkParameters
 end
 
 # The leaves combine **in quadrature** and not by summing their norms. The two leaves that carry

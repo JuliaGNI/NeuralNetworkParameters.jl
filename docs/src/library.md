@@ -32,6 +32,17 @@ TupleLayout
 ParametersLayout
 ```
 
+## Norms
+
+`GeometricBase.L2norm` of a whole parameter set, from which that package's generic
+`l2norm(x) = sqrt(L2norm(x))` follows. It is a method on a foreign generic and lives here rather than
+in `GeometricBase` for the reason its docstring gives: the correctness of it is this package's leaf
+protocol, which is not something `GeometricBase` can test.
+
+```@docs
+L2norm
+```
+
 ## Classifying a node
 
 ```@docs
