@@ -164,8 +164,8 @@ cannot alias each other or the flat vector.
 # and is not.
 @inline unflatten(l::ParametersLayout, data::AbstractVecOrMat) = NetworkParameters(
     unflatten(l.inner, data))
-@inline unflatten(l::NestedLayout, data::AbstractVecOrMat) =
-    NamedTuple{keys(l.children)}(_unflatten_children(l.children, data))
+@inline unflatten(l::NestedLayout, data::AbstractVecOrMat) = NamedTuple{keys(l.children)}(_unflatten_children(
+    l.children, data))
 @inline unflatten(l::TupleLayout, data::AbstractVecOrMat) = _unflatten_children(l.children, data)
 
 @inline unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))

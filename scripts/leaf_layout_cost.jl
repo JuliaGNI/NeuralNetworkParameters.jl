@@ -50,17 +50,23 @@ end
 
 # All leaves the same tiny matrix: this measures the shape a layout is held in, not the size of the
 # arrays in it, and a 2×2 keeps the run time next to nothing beside the compilation.
-flat_set(k::Integer) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
-    Tuple(fill(T(i), 2, 2) for i in 1:k))
+function flat_set(k::Integer)
+    NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
+        Tuple(fill(T(i), 2, 2) for i in 1:k))
+end
 
 # The keys differ per branch, so the 16 branches are 16 distinct `NamedTuple` types rather than one
 # compiled once and reused. A nested set whose branches share a type costs a fraction of this and would
 # make the nesting look free for the wrong reason.
-branch(j::Integer, k::Integer) = NamedTuple{Tuple(Symbol("L", j, "p", i) for i in 1:k)}(
-    Tuple(fill(T(i), 2, 2) for i in 1:k))
+function branch(j::Integer, k::Integer)
+    NamedTuple{Tuple(Symbol("L", j, "p", i) for i in 1:k)}(
+        Tuple(fill(T(i), 2, 2) for i in 1:k))
+end
 
-nested_set(o::Integer, k::Integer) = NamedTuple{Tuple(Symbol("L", j) for j in 1:o)}(
-    Tuple(branch(j, k) for j in 1:o))
+function nested_set(o::Integer, k::Integer)
+    NamedTuple{Tuple(Symbol("L", j) for j in 1:o)}(
+        Tuple(branch(j, k) for j in 1:o))
+end
 
 # Nodes in the type tree of the layout, which is the quantity the entry's "2.5 times the type" is.
 # `length(string(T))` cannot be used for it: Julia elides long types when printing, so a 369-child
@@ -86,6 +92,7 @@ function fan_out()
     println(rpad("set", 18), rpad("held in", 10), rpad("layout", 8), "type nodes")
     flush(stdout)
     for case in eachindex(CASES), wrapped in (false, true)
+
         run(pipeline(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project())
                       $(@__FILE__) --in-process $case $wrapped`))
     end

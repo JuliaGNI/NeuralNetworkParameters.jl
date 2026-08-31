@@ -81,8 +81,10 @@ const T = Float32
 
 # All leaves the same tiny matrix: this measures the shape of the branch, not the size of the arrays
 # in it, and a 2×2 keeps the run time next to nothing beside the compilation.
-wide_set(k::Integer) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
-    Tuple(fill(T(i), 2, 2) for i in 1:k))
+function wide_set(k::Integer)
+    NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
+        Tuple(fill(T(i), 2, 2) for i in 1:k))
+end
 
 # The shape a consumer actually holds. The leaves are the same; what differs is the method
 # `parameterlayout` enters through.
@@ -155,10 +157,13 @@ _leaves(ps) = ps
 # worth fixing rather than noting.
 const WIDTHS = (16, 32, 48, 64, 128, 369)
 
-header() = println(rpad("shape", 10), rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
-                   rpad("mapparams", 11), rpad("fold", 8), rpad("foldzip", 9), rpad("flatten", 9),
-                   rpad("unflatten", 11), rpad("tailfold", 10),
-                   "allocs eltype/flatten!/unflatten!/mapparameters!")
+function header()
+    println(
+        rpad("shape", 10), rpad("children", 10), rpad("layout", 9), rpad("map(zero)", 11),
+        rpad("mapparams", 11), rpad("fold", 8), rpad("foldzip", 9), rpad("flatten", 9),
+        rpad("unflatten", 11), rpad("tailfold", 10),
+        "allocs eltype/flatten!/unflatten!/mapparameters!")
+end
 
 # One width in one shape, in a process that has compiled nothing for either. Within the row the order
 # still matters — `flatten` builds a layout and would absorb `parameterlayout`, and `mapparameters`
@@ -190,9 +195,10 @@ function sweep_one(shape::Symbol, k)
     a_unflat = _unflatten_allocs(dest, layout, v)
     a_mapp = _thunk_allocs(() -> mapparameters!(_touch!, dest, ps))
 
-    println(rpad(shape, 10), rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
-            rpad(t_fold, 8), rpad(t_foldzip, 9), rpad(t_flat, 9), rpad(t_unflat, 11),
-            rpad(t_tail, 10), a_eltype, "/", a_flat, "/", a_unflat, "/", a_mapp)
+    println(
+        rpad(shape, 10), rpad(k, 10), rpad(t_layout, 9), rpad(t_map, 11), rpad(t_mapp, 11),
+        rpad(t_fold, 8), rpad(t_foldzip, 9), rpad(t_flat, 9), rpad(t_unflat, 11),
+        rpad(t_tail, 10), a_eltype, "/", a_flat, "/", a_unflat, "/", a_mapp)
     flush(stdout)
 end
 
@@ -201,6 +207,7 @@ function fan_out()
     header()
     flush(stdout)
     for (shape, _) in SHAPES, k in WIDTHS
+
         run(pipeline(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project())
                       $(@__FILE__) --in-process $shape $k`))
     end

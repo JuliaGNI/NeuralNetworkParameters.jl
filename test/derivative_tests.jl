@@ -128,8 +128,9 @@ end
           NetworkParameters((params = (W = [1.0, 1.0],),))
     # and the structural shape still goes back in, for a set whose keys it cannot be
     ext = Base.get_extension(NeuralNetworkParameters, :ZygoteRulesExt)
-    @test ext._rewrap(ps, (params = (L1 = (W = ones(2, 2), b = ones(2)),
-        L2 = (W = ones(1, 2), b = ones(1))),)) isa NetworkParameters
+    @test ext._rewrap(ps,
+        (params = (L1 = (W = ones(2, 2), b = ones(2)),
+            L2 = (W = ones(1, 2), b = ones(1))),)) isa NetworkParameters
     @test_throws ArgumentError ext._rewrap(ps, (nope = 1,))
 end
 
@@ -145,7 +146,8 @@ end
 
 @testset "a structural zero contributes nothing to the promotion" begin
     @test NeuralNetworkParameters.parameter_eltype(ChainRulesCore.ZeroTangent()) === Union{}
-    @test NeuralNetworkParameters.parameter_eltype((a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
+    @test NeuralNetworkParameters.parameter_eltype((
+        a = [1.0f0], b = ChainRulesCore.ZeroTangent())) ===
           Float32
 end
 
@@ -172,7 +174,8 @@ _pullback_allocs(pb, Δ) = @allocated pb(Δ)
         _pullback_allocs(pb, Δ)
     end
     flat = NetworkParameters((a = L, b = L, c = L, d = L))
-    layered = NetworkParameters((L1 = (a = L,), L2 = (b = L,), L3 = (c = L,), L4 = (d = L,)))
+    layered = NetworkParameters((
+        L1 = (a = L,), L2 = (b = L,), L3 = (c = L,), L4 = (d = L,)))
     @test _cost(layered) == _cost(flat)
 end
 
@@ -202,7 +205,8 @@ end
     cost_sym, read_sym = _structured_leaf_pullback(sample_sym(),
         ChainRulesCore.Tangent{Any}(S = ones(3), n = ChainRulesCore.NoTangent()))
     cost_padded, read_padded = _structured_leaf_pullback(sample_padded(),
-        ChainRulesCore.Tangent{Any}(a = ChainRulesCore.NoTangent(), b = ChainRulesCore.NoTangent(),
+        ChainRulesCore.Tangent{Any}(
+            a = ChainRulesCore.NoTangent(), b = ChainRulesCore.NoTangent(),
             c = ChainRulesCore.NoTangent(), d = ChainRulesCore.NoTangent(),
             e = ChainRulesCore.NoTangent(), S = ones(3)))
     @test cost_padded == cost_sym

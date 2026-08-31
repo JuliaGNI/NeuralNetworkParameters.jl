@@ -111,7 +111,8 @@ end
 # so they stay the chain they read best as.
 @generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ) where {Keys}
     calls = [:(_accumulate!(Δv, getfield(children, $i),
-                            _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i])))))) for i in 1:length(Keys)]
+                 _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i]))))))
+             for i in 1:length(Keys)]
     quote
         $(calls...)
         nothing
@@ -229,9 +230,12 @@ end
 # Both walk the storage of *one leaf*, so neither is wide the way a branch of layers is; the named one
 # is written out all the same, because splicing the keys in as literals is what keeps
 # `_cotangent_get`'s `haskey` a compile-time question.
-_matching_storage(storage::NamedTuple, nt::NamedTuple) =
+function _matching_storage(storage::NamedTuple, nt::NamedTuple)
     NamedTuple{keys(storage)}(_matching_named(storage, nt))
-_matching_storage(storage::Tuple, nt::NamedTuple) = _matching_positional(storage, values(nt))
+end
+function _matching_storage(storage::Tuple, nt::NamedTuple)
+    _matching_positional(storage, values(nt))
+end
 _matching_storage(_, nt::NamedTuple) = nt
 
 @generated function _matching_named(storage::NamedTuple{Keys}, nt) where {Keys}
@@ -239,5 +243,5 @@ _matching_storage(_, nt::NamedTuple) = nt
 end
 
 @inline _matching_positional(::Tuple{}, _) = ()
-@inline _matching_positional(storage::Tuple, Δ) =
-    (_cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)
+@inline _matching_positional(storage::Tuple, Δ) = (
+    _cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)

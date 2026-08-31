@@ -88,7 +88,8 @@ struct NetworkParameters{T, Keys, ValueTypes}
     # `T` is derived rather than chosen, which makes this an inner constructor and suppresses the ones
     # Julia would otherwise write. `parameter_eltype` lives in `leaves.jl`, included after this file;
     # nothing calls a constructor at load time, so the binding exists before any caller reaches it.
-    function NetworkParameters(params::NamedTuple{Keys, ValueTypes}) where {Keys, ValueTypes}
+    function NetworkParameters(params::NamedTuple{
+            Keys, ValueTypes}) where {Keys, ValueTypes}
         T = parameter_eltype(params)
         new{T, Keys, ValueTypes}(params)
     end
@@ -112,7 +113,8 @@ function NetworkParameters{T}(nt) where {T}
 end
 
 @noinline function _element_type_error(ps, T)
-    throw(ArgumentError(string("the leaves of these parameters promote to ", parameter_eltype(ps),
+    throw(ArgumentError(string(
+        "the leaves of these parameters promote to ", parameter_eltype(ps),
         ", not to ", T, ". The element type of a `NetworkParameters` is derived from its leaves ",
         "rather than chosen, so naming it asserts it.")))
 end
@@ -121,7 +123,8 @@ end
 # symbols where a type belongs. Left to dispatch it is a `MethodError` about a conversion nobody
 # asked for.
 @noinline function _keys_first_error(Keys)
-    throw(ArgumentError(string("`NetworkParameters{", Keys, "}(values)` names the element type, ",
+    throw(ArgumentError(string(
+        "`NetworkParameters{", Keys, "}(values)` names the element type, ",
         "which comes first. To build a set from its keys and values write ",
         "`NetworkParameters(NamedTuple{", Keys, "}(values))`.")))
 end

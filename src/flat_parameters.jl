@@ -81,7 +81,8 @@ end
 # same-length result; anything else is an ordinary array, since a layout that does not match its data
 # is worse than none.
 function Base.similar(fp::FlatParameters, ::Type{S}, dims::Dims) where {S}
-    dims == size(parent(fp)) ? FlatParameters(similar(parent(fp), S, dims), flatlayout(fp)) :
+    dims == size(parent(fp)) ?
+    FlatParameters(similar(parent(fp), S, dims), flatlayout(fp)) :
     similar(parent(fp), S, dims)
 end
 

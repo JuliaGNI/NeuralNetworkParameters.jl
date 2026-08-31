@@ -135,7 +135,8 @@ end
     b = mapparameters(x -> 2x, a)
 
     # the inner product of the two, taken without flattening either
-    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b) == 2 * (1 + 4 + 9 + 16)
+    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b) ==
+          2 * (1 + 4 + 9 + 16)
     # and at arity three, since nothing about the walk stops at two
     @test foldparameters((acc, x, y, z) -> acc + sum(x .* y .* z), 0.0, a, b, b) ==
           4 * (1 + 8 + 27 + 64)
@@ -168,7 +169,8 @@ end
 
     # the storage of a `Sym` is one array, so there is exactly one thing to pair the hole with, and
     # `op` sees it: 2 + 1 numbers from `L1` and 3 from `L2`, with `L3` paired against itself
-    @test foldstorage((acc, x, y) -> y === nothing ? acc + length(x) : acc, 0, ps, holes) == 6
+    @test foldstorage((acc, x, y) -> y === nothing ? acc + length(x) : acc, 0, ps, holes) ==
+          6
     @test mapstorage((x, y) -> y === nothing ? zero(x) : x, ps, holes).L2.S.S == zeros(3)
 
     # a hole against a *multi-block* leaf raises instead: one `nothing` cannot stand for each block,

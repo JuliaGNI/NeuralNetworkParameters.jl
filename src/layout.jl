@@ -200,8 +200,9 @@ function _layout_body(n::Int, wrap)
     n == 0 && return :(($(wrap(:(()), :offset)), offset))
     body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
     for i in 2:n
-        push!(body, :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) =
-            _layout(getfield(ps, $i), $(Symbol(:off_, i - 1)))))
+        push!(body,
+            :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) = _layout(
+                getfield(ps, $i), $(Symbol(:off_, i - 1)))))
     end
     children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
     final = Symbol(:off_, n)
@@ -213,11 +214,11 @@ end
 
 @generated function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
     _layout_body(length(Keys),
-        (cs, final) -> :(NestedLayout(NamedTuple{$Keys}($cs), (offset + 1):$final)))
+        (cs, final) -> :(NestedLayout(NamedTuple{$Keys}($cs), (offset + 1):($final))))
 end
 
 @generated function _layout(ps::Tuple, offset::Int)
-    _layout_body(fieldcount(ps), (cs, final) -> :(TupleLayout($cs, (offset + 1):$final)))
+    _layout_body(fieldcount(ps), (cs, final) -> :(TupleLayout($cs, (offset + 1):($final))))
 end
 
 # A leaf, terminal or wrapped, decided by **dispatch on the storage's type** rather than by an `if`

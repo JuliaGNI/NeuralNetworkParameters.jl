@@ -15,7 +15,8 @@ using Test
 # loaded this package -- there is nothing to trigger. `GeometricBase` is a hard dependency, which most
 # of this ecosystem takes anyway and whose own sole dependency is `Unicode`.
 @testset "the method is this package's own" begin
-    ps = NetworkParameters((L1 = (W = [3.0 0.0; 0.0 4.0], b = [0.0, 0.0]), L2 = (W = [0.0 0.0], b = [12.0])))
+    ps = NetworkParameters((
+        L1 = (W = [3.0 0.0; 0.0 4.0], b = [0.0, 0.0]), L2 = (W = [0.0 0.0], b = [12.0])))
     @test which(L2norm, Tuple{typeof(ps)}).module === NeuralNetworkParameters
 
     # ... and it is not piracy, which is what makes that legal: `L2norm` is `GeometricBase`'s, but the
@@ -28,7 +29,8 @@ end
 # two cannot be confused, because the difference is inherited by every stopping criterion computed
 # from this.
 @testset "the leaves combine in quadrature" begin
-    ps = NetworkParameters((L1 = (W = [3.0 0.0; 0.0 4.0], b = [0.0, 0.0]), L2 = (W = [0.0 0.0], b = [12.0])))
+    ps = NetworkParameters((
+        L1 = (W = [3.0 0.0; 0.0 4.0], b = [0.0, 0.0]), L2 = (W = [0.0 0.0], b = [12.0])))
     leaves = (ps.L1.W, ps.L1.b, ps.L2.W, ps.L2.b)
 
     @test l2norm(ps) ≈ 13.0
@@ -42,9 +44,10 @@ end
 # give the same number. `foldparameters` threads its accumulator through the branches, so this holds by
 # construction rather than by the two groupings happening to agree.
 @testset "the grouping of the leaves does not change the norm" begin
-    flat   = NetworkParameters((a = [3.0, 0.0], b = [0.0, 4.0], c = [12.0]))
+    flat = NetworkParameters((a = [3.0, 0.0], b = [0.0, 4.0], c = [12.0]))
     nested = NetworkParameters((L1 = (a = [3.0, 0.0],), L2 = (b = [0.0, 4.0], c = [12.0])))
-    deep   = NetworkParameters((G = (L1 = (a = [3.0, 0.0],), L2 = (b = [0.0, 4.0],)), H = (c = [12.0],)))
+    deep = NetworkParameters((
+        G = (L1 = (a = [3.0, 0.0],), L2 = (b = [0.0, 4.0],)), H = (c = [12.0],)))
 
     @test l2norm(flat) == l2norm(nested) == l2norm(deep) ≈ 13.0
 end

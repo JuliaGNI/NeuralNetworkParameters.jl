@@ -24,16 +24,20 @@ using Test
 # past it, so a case either side of that edge is worth having when a walk is rewritten.
 const WIDTHS = (48, 369)
 
-wide_set(k) = NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
-    Tuple(fill(Float32(i), 2, 2) for i in 1:k))
+function wide_set(k)
+    NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(
+        Tuple(fill(Float32(i), 2, 2) for i in 1:k))
+end
 
 # The same width with a layer's worth of nesting under each child, which is the shape a network of
 # many layers actually has. `wide_set` exercises the width alone: its children are arrays, and an
 # array is already a heap object, so a walk that reaches one has nothing to keep off the heap. Under
 # `nested_set` every child is a branch that a walk has to take apart in place, and that is where a
 # walk which is written correctly for the width but not inlined shows up.
-nested_set(k) = NamedTuple{Tuple(Symbol("L", i) for i in 1:k)}(
-    Tuple((W = fill(Float32(i), 2, 2), b = fill(Float32(i), 2)) for i in 1:k))
+function nested_set(k)
+    NamedTuple{Tuple(Symbol("L", i) for i in 1:k)}(
+        Tuple((W = fill(Float32(i), 2, 2), b = fill(Float32(i), 2)) for i in 1:k))
+end
 
 # Allocations are measured from inside a function throughout, for the reason `flatten_tests.jl` gives:
 # that is the claim that matters, an optimizer's inner loop rather than the top level of a testset.
@@ -62,7 +66,7 @@ _thunk_allocs(thunk) = (thunk(); thunk(); @allocated thunk())
     @test flatlength(ps) == 4k
     @test unflatten(layout, v) == ps
     # the order is the order of the keys, so the last leaf is the last four entries
-    @test v[end-3:end] == fill(Float32(k), 4)
+    @test v[(end - 3):end] == fill(Float32(k), 4)
 end
 
 @testset "the in-place forms do not allocate at $k children" for k in WIDTHS
@@ -291,8 +295,10 @@ _rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
     # costs about 16 bytes a child, so the gap it opens is twice this bound at both widths, while the
     # jitter is two orders of magnitude below it. The promotion itself is asserted at exactly zero
     # above, which is the guarantee; these two are its consequence for a caller.
-    _flatten_allocs_out(ps); _flatten_typed_allocs(ps)
-    _rrule_allocs(ps); _rrule_typed_allocs(ps)
+    _flatten_allocs_out(ps)
+    _flatten_typed_allocs(ps)
+    _rrule_allocs(ps)
+    _rrule_typed_allocs(ps)
     @test _flatten_allocs_out(ps) - _flatten_typed_allocs(ps) < 8k
     @test _rrule_allocs(ps) - _rrule_typed_allocs(ps) < 8k
 end
