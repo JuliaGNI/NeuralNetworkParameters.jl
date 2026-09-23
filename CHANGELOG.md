@@ -4,7 +4,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeting 0.4.0
+## [0.4.0] — 2026-09-23
 
 **The `NetworkParameters` wrapper now differentiates directly.** Under Zygote,
 `Zygote.pullback(f, ps::NetworkParameters)` calls `f` with the wrapper itself rather than the
@@ -12,7 +12,7 @@ inner `NamedTuple`. A loss annotated `ps::NetworkParameters` now differentiates 
 `MethodError` before. The gradient remains a `NetworkParameters`, and an untouched set still
 returns `(nothing,)`.
 
-### Migrating
+### Breaking Changes
 
 - **A loss typed to receive a bare `NamedTuple` must now accept a `NetworkParameters`.** Reading a
   layer with `ps.L1`, and a field of a layer with `ps.L1.W`, works as before. A loss that calls
