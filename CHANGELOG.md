@@ -41,9 +41,15 @@ returns `(nothing,)`.
   off-diagonal entries are G_ij + G_ji. Called once per leaf, on the accumulated cotangent, where
   an AD cotangent becomes a parameter gradient: the gradient that the `ZygoteRules` extension
   returns, and the flat gradient from the `unflatten` rule. The default is the identity;
-  `GeometricOptimizers` adds the methods for `SymmetricMatrix` and `SkewSymMatrix`. Until it does,
-  a Zygote gradient of such a leaf holds half of ∂L/∂S off the diagonal, which is the value it has
-  held all along.
+  `GeometricOptimizers` adds the methods for `SymmetricMatrix` and `SkewSymMatrix`. The extension
+  converts the gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a `Function`
+  `f` and a set that is the only argument. A call with a further argument, a callable struct for
+  `f`, or a set held inside another argument returns the structural tangent `(params = …,)` with
+  the natural cotangent at each leaf, as 0.3.0 does. A set nested in a set gets the conversion too,
+  and its gradient is a `NetworkParameters`.
+- **`+` for two `NetworkParameters`**, leaf by leaf and at the level of each leaf's storage, with
+  `nothing` a zero. Zygote adds two gradients from the `flatten` rule with it, so a loss that calls
+  `flatten(p)` twice differentiates.
 
 - **`ChainRulesCore.ProjectTo(::NetworkParameters)`, matching the leaf protocol.** Projects leaf
   by leaf; holes stay `nothing`, structural tangents are left alone. With it a structured leaf

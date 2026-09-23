@@ -383,6 +383,51 @@ end
     @test g ≈ reference
 end
 
+@testset "a loss calling `flatten(p)` twice ($T)" for T in (Float32, Float64)
+    # each `flatten` rule returns a `NetworkParameters`, and Zygote adds the two with `+`
+    ps = sample_network(T)
+    g = Zygote.gradient(p -> sum(first(flatten(p))) + sum(abs2, first(flatten(p))), ps)[1]
+    @test g isa NetworkParameters{T}
+    @test flatten(g)[1] ≈ 1 .+ 2 .* flatten(ps)[1]
+    qs = sym_network(T)
+    v, _ = flatten(qs)
+    h = Zygote.gradient(p -> sum(first(flatten(p))) + sum(abs2, first(flatten(p))), qs)[1]
+    @test h.L2.S isa Sym{T}
+    @test flatten(h)[1] ≈ 1 .+ 2 .* v
+end
+
+@testset "two sets add leaf by leaf, `nothing` a zero ($T)" for T in (Float32, Float64)
+    a = NetworkParameters((L1 = (W = T[1 2], b = nothing), L2 = nothing,
+        L3 = (S = Sym(T[1, 2, 3], 2),)))
+    b = NetworkParameters((L1 = (W = T[10 20], b = T[5]), L2 = nothing,
+        L3 = (S = Sym(T[10, 20, 30], 2),)))
+    c = a + b
+    @test c.L1.W == T[11 22]
+    @test c.L1.b == T[5]
+    @test c.L2 === nothing
+    @test c.L3.S isa Sym{T}
+    @test c.L3.S.S == T[11, 22, 33]
+end
+
+@testset "a nested set gets the storage gradient on both paths ($T)" for T in (Float32, Float64)
+    ps = NetworkParameters((L1 = (W = T[0.1 0.2; 0.3 0.4], b = T[0.5, 0.6]),
+        sub = NetworkParameters((L2 = (S = Sym(T[0.7, -0.8, 0.9], 2),),))))
+    x = T[1, -2]
+    f(p) = sum(tanh.(p.sub.L2.S * tanh.(p.L1.W * x .+ p.L1.b)))
+    v, l = flatten(ps)
+    reference = ForwardDiff.gradient(w -> f(unflatten(l, w)), v)
+    STORAGE_GRADIENT_CALLS[] = 0
+    g = Zygote.pullback(f, ps)[2](one(T))[1]
+    @test STORAGE_GRADIENT_CALLS[] == 1
+    @test g.sub isa NetworkParameters{T}
+    @test g.sub.L2.S isa Sym{T}
+    @test flatten(g)[1] ≈ reference
+    @test flatten(Zygote.gradient(f, ps)[1])[1] ≈ reference
+    STORAGE_GRADIENT_CALLS[] = 0
+    @test Zygote.gradient(w -> f(unflatten(l, w)), v)[1] ≈ reference
+    @test STORAGE_GRADIENT_CALLS[] == 1
+end
+
 @testset "the storage gradient is not applied to a structural tangent" begin
     # a loss reading the storage field directly gets ∂L/∂S from Zygote already, as a tangent over the
     # leaf's fields; the default method passes it through

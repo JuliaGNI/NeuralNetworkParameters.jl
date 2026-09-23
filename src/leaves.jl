@@ -113,6 +113,12 @@ structural zero (`nothing` or a `ChainRulesCore.AbstractZero`), and the flat pat
 leaf whose [`freeparameters`](@ref) are not the leaf itself: the entries of a terminal leaf are its
 storage, so its cotangent is its storage gradient already.
 
+The extension converts the gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a
+`Function` `f` and a set `ps` that is the only argument, which is how a loss is differentiated with
+respect to a set. Zygote's own methods answer every other call: a further argument, a callable
+struct for `f`, or a set held inside another argument. Those return the structural tangent
+`(params = …,)` with the natural cotangent at each leaf, and do not call this function.
+
 A method converts an *array* cotangent only. A structural tangent over the leaf's fields, a
 `NamedTuple` or a `ChainRulesCore.Tangent`, comes from a loss that read the storage field directly
 and holds ``\partial L/\partial S`` already, so the default passes it through. The return value is

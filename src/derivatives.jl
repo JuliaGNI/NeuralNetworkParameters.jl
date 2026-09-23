@@ -148,10 +148,11 @@ function _add_leaf_cotangent!(_, ::LeafLayout, Δ)
         "the reverse pass produced a tangent for.")))
 end
 
-# A cotangent for a `NetworkParameters` arrives in one of two shapes: the structural tangent Zygote
-# builds for the wrapper, a `Tangent` whose single field is the wrapped `NamedTuple`, or the type
-# itself, which is what the `flatten` rule returns.
+# A cotangent for a `NetworkParameters` arrives as the structural tangent of the wrapper, whose single
+# field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` in Zygote's own reverse
+# pass over a set nested in a set — or as the type itself, which is what the `flatten` rule returns.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
+_unwrap_parameters(Δ::NamedTuple{(:params,)}) = Δ.params
 _unwrap_parameters(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ).params
 
 _cotangent_backing(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ)
@@ -268,6 +269,14 @@ function _map_cotangent(f::F, x::Tuple, Δ) where {F}
     _map_cotangent_positional(f, x, _cotangent_backing(Δ))
 end
 
+# A set inside a set: its gradient is a set too. Zygote hands its cotangent over as the structural
+# `(params = …,)`, and a gradient already rewrapped arrives as the type itself.
+function _map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    NetworkParameters(_map_cotangent(f, params(x), _unwrap_parameters(Δ)))
+end
+
 function _map_cotangent(f::F, x, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
@@ -300,3 +309,24 @@ end
 
 _project_leaf(x, Δ::Union{AbstractArray, Number}) = ChainRulesCore.ProjectTo(x)(Δ)
 _project_leaf(_, Δ) = Δ
+
+# Two gradients of one set add leaf by leaf, with `nothing` a zero. Zygote adds the cotangents of the
+# uses of an argument with `+`, and a loss that calls `flatten` twice has two `NetworkParameters` from
+# the `flatten` rule to add. A leaf adds at the level of its storage, as `mapstorage` does, so a
+# structured leaf stays one rather than becoming the sum of two dense interfaces.
+function Base.:+(a::NetworkParameters, b::NetworkParameters)
+    NetworkParameters(_add_cotangents(
+        params(a), params(b)))
+end
+
+function _add_cotangents(a::NamedTuple{Keys}, b::NamedTuple{Keys}) where {Keys}
+    map(_add_cotangents, a, b)
+end
+_add_cotangents(a::Tuple, b::Tuple) = map(_add_cotangents, a, b)
+_add_cotangents(a::NetworkParameters, b::NetworkParameters) = a + b
+_add_cotangents(a, b) = _add_leaves(a, b)
+
+_add_leaves(::Nothing, ::Nothing) = nothing
+_add_leaves(::Nothing, b) = b
+_add_leaves(a, ::Nothing) = a
+_add_leaves(a, b) = mapstorage(+, a, b)
