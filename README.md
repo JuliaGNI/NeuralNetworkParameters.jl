@@ -64,8 +64,8 @@ unflatten(layout, g)          # the gradient, one entry per layer
 `unflatten` is generic in the element type of its vector, which is what makes this work: a
 `Dual`-valued vector produces `Dual`-valued parameters. Reverse mode is covered too — there are
 `ChainRulesCore` rules for both conversions, so `Zygote` can differentiate through them, and with
-`ZygoteRules` loaded the gradient of a `NetworkParameters` is a `NetworkParameters` rather than a
-tangent nobody can consume.
+`ZygoteRules` loaded a function differentiated with respect to a `NetworkParameters` is called with
+it, and its gradient is a `NetworkParameters` rather than a tangent nobody can consume.
 
 For inner loops there are in-place forms. `flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)`
 allocate nothing when called from compiled code, so an optimizer that flattens once per step need not

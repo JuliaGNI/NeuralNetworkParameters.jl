@@ -29,7 +29,8 @@
 # the same straight-line code the chain used to inline down to. They are `_foreach_zip`, `_fold_zip`
 # and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and `_unflatten_children!` in
 # `flatten.jl`, the two branch cases of `_layout` in `layout.jl`, `_promote_eltypes` in `leaves.jl`,
-# and `_accumulate_named!` and `_matching_named` on the reverse pass in `derivatives.jl`.
+# and `_accumulate_named!`, `_matching_named` and `_map_cotangent_named` on the reverse pass in
+# `derivatives.jl`.
 #
 # A walk that takes *several* sets in lockstep indexes each of them in place too, and that is the same
 # point made about the second argument. Taking `values` of a branch to zip it materialises a temporary

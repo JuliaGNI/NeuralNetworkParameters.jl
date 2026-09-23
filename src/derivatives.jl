@@ -89,7 +89,8 @@ end
 
 function _accumulate!(Δv, l::WrappedLayout, Δ)
     Δ === nothing && return Δv
-    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δ)))
+    Δs = storage_gradient(l.prototype, Δ)
+    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δs)))
 end
 
 function _accumulate!(Δv, l::LeafLayout, Δ)
@@ -147,17 +148,13 @@ function _add_leaf_cotangent!(_, ::LeafLayout, Δ)
         "the reverse pass produced a tangent for.")))
 end
 
-# A cotangent for a `NetworkParameters` arrives either as the type itself, or — when the reverse pass
-# built it structurally — as a tangent whose single field is the wrapped `NamedTuple`.
+# A cotangent for a `NetworkParameters` arrives in one of two shapes: the structural tangent Zygote
+# builds for the wrapper, a `Tangent` whose single field is the wrapped `NamedTuple`, or the type
+# itself, which is what the `flatten` rule returns.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
-_unwrap_parameters(Δ::NamedTuple{(:params,)}) = Δ.params
-_unwrap_parameters(Δ) = _unwrap_parameters_backing(_cotangent_backing(Δ))
-
-_unwrap_parameters_backing(nt::NamedTuple{(:params,)}) = nt.params
-_unwrap_parameters_backing(nt) = nt
+_unwrap_parameters(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ).params
 
 _cotangent_backing(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ)
-_cotangent_backing(Δ::NetworkParameters) = params(Δ)
 _cotangent_backing(Δ) = Δ
 
 # Anything the cotangent is silent about becomes `nothing`, i.e. a structural zero.
@@ -245,3 +242,61 @@ end
 @inline _matching_positional(::Tuple{}, _) = ()
 @inline _matching_positional(storage::Tuple, Δ) = (
     _cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)
+
+# ---------------------------------------------------------------------------------------------------
+# A cotangent tree, leaf by leaf against the parameters
+#
+# `_map_cotangent(f, ps, Δ)` walks the branches of the primal `ps` and the cotangent `Δ` together and
+# returns the cotangent with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero,
+# at a leaf or at a whole branch — comes back as `nothing` and `f` never sees it. The result has the
+# shape Zygote gives a `NamedTuple`: keyed by the primal's keys, `nothing` where nothing was touched.
+#
+# Both callers run once per reverse pass: the `ZygoteRules` extension with `storage_gradient`, and
+# `ProjectTo(::NetworkParameters)` with each leaf's projection. So the named walk is written out for
+# the reason `_accumulate_named!` is.
+# ---------------------------------------------------------------------------------------------------
+
+function _map_cotangent(f::F, x::NamedTuple, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    _map_cotangent_named(f, x, _cotangent_backing(Δ))
+end
+
+function _map_cotangent(f::F, x::Tuple, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    _map_cotangent_positional(f, x, _cotangent_backing(Δ))
+end
+
+function _map_cotangent(f::F, x, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    f(x, Δ)
+end
+
+@generated function _map_cotangent_named(f, x::NamedTuple{Keys}, Δ) where {Keys}
+    children = [:(_map_cotangent(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
+                for i in 1:length(Keys)]
+    :(NamedTuple{Keys}(($(children...),)))
+end
+
+@inline _map_cotangent_positional(f, ::Tuple{}, Δ) = ()
+@inline _map_cotangent_positional(f, xs::Tuple, Δ) = (
+    _map_cotangent(f, first(xs), _cotangent_head(Δ)),
+    _map_cotangent_positional(f, Base.tail(xs), _cotangent_tail(Δ))...)
+
+# `Zygote.gradient` projects its result with `ProjectTo` of the argument. For a `NetworkParameters` that
+# is the projection of each leaf, as it is for the `NamedTuple` inside: a leaf read twice gets a dense
+# `Matrix` cotangent, and its own projection gives back the leaf's type. Only an array or a number is
+# projected. A structural tangent over a leaf's fields is a tangent already, and `ProjectTo` of an
+# array does not accept one in the shape Zygote gives it, a `NamedTuple`.
+function ChainRulesCore.ProjectTo(ps::NetworkParameters)
+    ChainRulesCore.ProjectTo{NetworkParameters}(; params = params(ps))
+end
+
+function (project::ChainRulesCore.ProjectTo{NetworkParameters})(Δ::NetworkParameters)
+    NetworkParameters(_map_cotangent(_project_leaf, project.params, params(Δ)))
+end
+
+_project_leaf(x, Δ::Union{AbstractArray, Number}) = ChainRulesCore.ProjectTo(x)(Δ)
+_project_leaf(_, Δ) = Δ

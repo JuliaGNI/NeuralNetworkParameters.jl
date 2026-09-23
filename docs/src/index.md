@@ -93,8 +93,8 @@ unflatten(layout, g)          # the gradient, one entry per layer
 [`unflatten`](@ref) is generic in the element type of its vector, which is what makes this work:
 a `Dual`-valued vector produces `Dual`-valued parameters. Reverse mode is covered too — there are
 `ChainRulesCore` rules for both conversions, so `Zygote` can differentiate through them, and with
-`ZygoteRules` loaded the gradient of a `NetworkParameters` is a `NetworkParameters` rather than a
-tangent nobody can consume.
+`ZygoteRules` loaded a function differentiated with respect to a `NetworkParameters` is called with
+it, and its gradient is a `NetworkParameters` rather than a tangent nobody can consume.
 
 ## Structured parameters
 

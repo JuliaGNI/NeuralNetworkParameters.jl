@@ -4,6 +4,58 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — targeting 0.4.0
+
+**The `NetworkParameters` wrapper now differentiates directly.** Under Zygote,
+`Zygote.pullback(f, ps::NetworkParameters)` calls `f` with the wrapper itself rather than the
+inner `NamedTuple`. A loss annotated `ps::NetworkParameters` now differentiates where it raised
+`MethodError` before. The gradient remains a `NetworkParameters`, and an untouched set still
+returns `(nothing,)`.
+
+### Migrating
+
+- **A loss typed to receive a bare `NamedTuple` must now accept a `NetworkParameters`.** Reading a
+  layer with `ps.L1`, and a field of a layer with `ps.L1.W`, works as before. A loss that calls
+  methods written for a `NamedTuple` only either broadens them to a `NetworkParameters` or unwraps
+  the set with `params(ps)`.
+- **A layer named `params` keeps its shape.** The gradient is rewrapped from the structural tangent
+  of the wrapper, whose own field is always the outer one, so the collision that 0.3.0 describes
+  does not arise.
+
+- **A loss that uses both `flatten(p)` and field access (e.g. `p.L1.W`) now raises `MethodError`.**
+  The `flatten` rule returns a gradient in storage coordinates; field access returns the
+  structural tangent. Zygote cannot add them. This is deliberate: a silent wrong value is worse
+  than a loud error. A loss must choose one path: either flatten the whole set, or read fields,
+  not both.
+
+- **The pullback of `ChainRulesCore.rrule(unflatten, …)` accepts two shapes of cotangent for the
+  whole set**: a `Tangent` whose one field is `params`, which is what Zygote passes, and a
+  `NetworkParameters`, which is what the `flatten` rule returns. A caller that invokes the rule
+  directly with a bare `NamedTuple`, keyed by the layers or by `params`, wraps it in one of these.
+
+### Added
+
+- **`storage_gradient(leaf, Δ)`, exported**, part of the leaf protocol alongside
+  `freeparameters`/`rebuild`. It converts the interface cotangent that AD gives a structured
+  leaf into the gradient with respect to the leaf's storage — e.g. for a symmetric matrix, the
+  off-diagonal entries are G_ij + G_ji. Called once per leaf, on the accumulated cotangent, where
+  an AD cotangent becomes a parameter gradient: the gradient that the `ZygoteRules` extension
+  returns, and the flat gradient from the `unflatten` rule. The default is the identity;
+  `GeometricOptimizers` adds the methods for `SymmetricMatrix` and `SkewSymMatrix`. Until it does,
+  a Zygote gradient of such a leaf holds half of ∂L/∂S off the diagonal, which is the value it has
+  held all along.
+
+- **`ChainRulesCore.ProjectTo(::NetworkParameters)`, matching the leaf protocol.** Projects leaf
+  by leaf; holes stay `nothing`, structural tangents are left alone. With it a structured leaf
+  read twice, whose cotangent is a dense array, keeps its own type when that type has a
+  `ProjectTo`.
+
+- **A Zygote adjoint for `literal_getproperty` on `NetworkParameters`.** Reading a layer with
+  `p.L1` now infers and costs what it costs on the bare `NamedTuple`, rather than dispatching on
+  a runtime `Symbol`. Against 0.3.0 the pullback and its reverse pass take the same time on a
+  three-layer loss (0.4 μs) and on an eight-layer loop (36 μs); the reverse pass allocates 128 and
+  752 bytes more.
+
 ## [0.3.0] — 2026-08-29
 
 **`ParameterSet` is removed.** A whole set of parameters is a `NetworkParameters`, and that is the

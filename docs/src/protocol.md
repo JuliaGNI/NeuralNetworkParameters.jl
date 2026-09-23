@@ -16,6 +16,14 @@ freeparameters
 rebuild
 ```
 
+A type whose storage is not its interface adds a third method, for reverse-mode differentiation: AD
+gives the cotangent of the interface, and a parameter gradient is the gradient with respect to the
+storage.
+
+```@docs
+storage_gradient
+```
+
 With them defined, the type flattens, walks and saves — nothing in this package holds a list of which
 structured types exist. That matters because the types live *upstream* of the package that trains with
 them: `GeometricOptimizers` owns them, `GeometricMachineLearning` uses them, and a serialiser driven by

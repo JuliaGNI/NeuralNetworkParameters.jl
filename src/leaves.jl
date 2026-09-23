@@ -92,6 +92,41 @@ function rebuild(prototype, data)
     throw(ArgumentError(_no_protocol_message(prototype, :rebuild)))
 end
 
+@doc raw"""
+    storage_gradient(leaf, Δ)
+
+The gradient with respect to the storage of `leaf` — its [`freeparameters`](@ref) — from the cotangent
+`Δ` that reverse-mode differentiation gives for it. The identity by default.
+
+A structured leaf presents one interface and stores another, and AD differentiates the interface. For
+a symmetric matrix with storage ``S``, the cotangent is the *natural* one, a matrix ``G`` paired with
+the dense interface; the parameter gradient is ``\partial L/\partial S``, which counts each stored
+off-diagonal entry twice: ``G_{ij} + G_{ji}``. The two differ by a factor of two off the diagonal, so
+a type whose storage is not its interface defines a method that converts one to the other.
+
+This package calls it exactly once per leaf, on the accumulated cotangent, at the two places where an
+AD cotangent becomes a parameter gradient: the gradient that the `ZygoteRules` extension returns for a
+[`NetworkParameters`](@ref), and the flat gradient that the reverse rule of [`unflatten`](@ref)
+returns. It dispatches on the primal `leaf`, because the type of `Δ` depends on how the loss used the
+leaf: a leaf used twice gets a dense `Matrix`, whatever its own type is. It is never called with a
+structural zero (`nothing` or a `ChainRulesCore.AbstractZero`), and the flat path calls it only for a
+leaf whose [`freeparameters`](@ref) are not the leaf itself: the entries of a terminal leaf are its
+storage, so its cotangent is its storage gradient already.
+
+A method converts an *array* cotangent only. A structural tangent over the leaf's fields, a
+`NamedTuple` or a `ChainRulesCore.Tangent`, comes from a loss that read the storage field directly
+and holds ``\partial L/\partial S`` already, so the default passes it through. The return value is
+read with [`freeparameters`](@ref) on the flat path, so a method returns a leaf of the same type.
+
+# Extending
+
+```julia
+# a `SymmetricMatrix` whose storage is the lower triangle of `G + transpose(G)`, diagonal counted once
+NeuralNetworkParameters.storage_gradient(A::SymmetricMatrix, G::AbstractMatrix) = ...
+```
+"""
+storage_gradient(leaf, Δ) = Δ
+
 """
     parameter_metadata(x)
 
