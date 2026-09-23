@@ -111,7 +111,9 @@ returns. It dispatches on the primal `leaf`, because the type of `Δ` depends on
 leaf: a leaf used twice gets a dense `Matrix`, whatever its own type is. It is never called with a
 structural zero (`nothing` or a `ChainRulesCore.AbstractZero`), and the flat path calls it only for a
 leaf whose [`freeparameters`](@ref) are not the leaf itself: the entries of a terminal leaf are its
-storage, so its cotangent is its storage gradient already.
+storage, so its cotangent is its storage gradient already. For the same reason it is not called for
+a leaf whose cotangent is part of a `NetworkParameters`, which is what the reverse rule of
+[`flatten`](@ref) returns: its leaves hold the storage gradient already.
 
 The extension converts the gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a
 `Function` `f` and a set `ps` that is the only argument, which is how a loss is differentiated with

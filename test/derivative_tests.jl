@@ -262,8 +262,8 @@ end
 
 @testset "reading a layer with `p.L1` infers ($T)" for T in (Float32, Float64)
     # without the extension's adjoint for `literal_getproperty`, Zygote differentiates the overloaded
-    # `getproperty` with a runtime `Symbol`: the forward pass does not infer, and costs twenty times
-    # what the same loss costs on the bare `NamedTuple`
+    # `getproperty` with a runtime `Symbol`: the forward pass does not infer, and is slower and
+    # allocates more than the same loss on the bare `NamedTuple`
     ps = sample_network(T)
     x = T[1, 2]
     f = p -> network_loss(p, x)
@@ -426,6 +426,86 @@ end
     STORAGE_GRADIENT_CALLS[] = 0
     @test Zygote.gradient(w -> f(unflatten(l, w)), v)[1] ≈ reference
     @test STORAGE_GRADIENT_CALLS[] == 1
+end
+
+# The `flatten` rule returns a `NetworkParameters` whose leaves hold ∂L/∂S already. Neither walk may
+# convert such a gradient a second time: that doubles the off-diagonal entries of a `Sym`.
+@testset "a gradient from the `flatten` rule is not converted again ($T)" for T in (Float32, Float64)
+    ps = NetworkParameters((L1 = (S = Sym(T[1, 2, 3], 2),),))
+    v, l = flatten(ps)
+    f(w) = sum(abs2, first(flatten(unflatten(l, w))))
+    STORAGE_GRADIENT_CALLS[] = 0
+    g = Zygote.gradient(f, v)[1]
+    @test STORAGE_GRADIENT_CALLS[] == 0
+    @test g isa Vector{T}
+    @test g ≈ ForwardDiff.gradient(f, v)
+    @test g ≈ 2 .* v
+end
+
+@testset "a nested set flattened in the loss ($T)" for T in (Float32, Float64)
+    # `p.L1.S` gets a natural cotangent and is converted once; `p.sub` gets the `flatten` rule's
+    ps = NetworkParameters((L1 = (S = Sym(T[0.7, -0.8, 0.9], 2),),
+        sub = NetworkParameters((L2 = (S = Sym(T[1, 2, 3], 2),),))))
+    x = T[1, -2]
+    f(p) = sum(abs2, p.L1.S * x) + sum(abs2, first(flatten(p.sub)))
+    v, l = flatten(ps)
+    reference = ForwardDiff.gradient(w -> f(unflatten(l, w)), v)
+    STORAGE_GRADIENT_CALLS[] = 0
+    g = Zygote.pullback(f, ps)[2](one(T))[1]
+    @test STORAGE_GRADIENT_CALLS[] == 1
+    @test g.sub isa NetworkParameters{T}
+    @test g.sub.L2.S.S ≈ T[2, 4, 6]
+    @test flatten(g)[1] ≈ reference
+    STORAGE_GRADIENT_CALLS[] = 0
+    @test flatten(Zygote.gradient(f, ps)[1])[1] ≈ reference
+    @test STORAGE_GRADIENT_CALLS[] == 1
+    STORAGE_GRADIENT_CALLS[] = 0
+    @test Zygote.gradient(w -> f(unflatten(l, w)), v)[1] ≈ reference
+    @test STORAGE_GRADIENT_CALLS[] == 1
+end
+
+@testset "a tuple branch gets the storage gradient ($T)" for T in (Float32, Float64)
+    ps = NetworkParameters((t = (T[1, 2], Sym(T[1, 2, 3], 2)), u = (b = T[3],)))
+    x = T[1, -2]
+    f(p) = sum(p.t[1]) + sum(abs2, p.t[2] * x)
+    v, l = flatten(ps)
+    # by hand: S x = (-3, -4), G = 2 (S x) xᵀ = [-6 12; -8 16], ∂L/∂S = (G₁₁, G₂₁ + G₁₂, G₂₂)
+    reference = ForwardDiff.gradient(w -> f(unflatten(l, w)), v)
+    @test reference ≈ T[1, 1, -6, 4, 16, 0]
+    STORAGE_GRADIENT_CALLS[] = 0
+    g = Zygote.pullback(f, ps)[2](one(T))[1]
+    @test STORAGE_GRADIENT_CALLS[] == 1
+    @test g.t[1] ≈ T[1, 1]
+    @test g.t[2] isa Sym{T}
+    @test g.t[2].S ≈ T[-6, 4, 16]
+    @test g.u === nothing
+    h = Zygote.gradient(f, ps)[1]
+    @test h.t[2] isa Sym{T}
+    @test h.t[2].S ≈ T[-6, 4, 16]
+    # a tuple branch the loss never reads is a hole
+    @test Zygote.gradient(p -> sum(p.u.b), ps)[1].t === nothing
+end
+
+@testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)
+    a = NetworkParameters((t = (T[1, 2], Sym(T[1, 2, 3], 2)),
+        sub = NetworkParameters((L1 = (W = T[1 2], b = T[4]),))))
+    b = NetworkParameters((t = (T[10, 20], Sym(T[10, 20, 30], 2)),
+        sub = NetworkParameters((L1 = (W = T[10 20], b = nothing),))))
+    c = a + b
+    @test c.t[1] == T[11, 22]
+    @test c.t[2] isa Sym{T}
+    @test c.t[2].S == T[11, 22, 33]
+    @test c.sub isa NetworkParameters{T}
+    @test c.sub.L1.W == T[11 22]
+    @test c.sub.L1.b == T[4]
+    # and the same through Zygote, which adds the two gradients of `flatten(p)` with `+`
+    ps = NetworkParameters((t = (T[1, 2], Sym(T[1, 2, 3], 2)),
+        sub = NetworkParameters((L1 = (W = T[4 5],),))))
+    v, _ = flatten(ps)
+    h = Zygote.gradient(p -> sum(first(flatten(p))) + sum(abs2, first(flatten(p))), ps)[1]
+    @test h.t[2] isa Sym{T}
+    @test h.sub isa NetworkParameters{T}
+    @test flatten(h)[1] ≈ 1 .+ 2 .* v
 end
 
 @testset "the `unflatten` rule reads each shape of a set's cotangent ($T)" for T in (Float32, Float64)

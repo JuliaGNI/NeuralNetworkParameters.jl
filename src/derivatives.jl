@@ -61,39 +61,49 @@ _flat_cotangent(Δ::ChainRulesCore.Tangent) = _normalized(first(ChainRulesCore.b
 # `nothing` itself rather than leaving it to dispatch: a method specialising on the cotangent as well as
 # the layout would be ambiguous with the per-layout ones, and a missing branch would then fail where a
 # missing leaf did not.
+#
+# The walk carries the conversion `g` it applies at a structured leaf: `storage_gradient` for the natural
+# cotangent that AD gives, and the identity below a `NetworkParameters` cotangent. That one comes from
+# the `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already.
 # ---------------------------------------------------------------------------------------------------
 
-_accumulate_cotangent!(Δv, l::ParameterLayout, Δ) = _accumulate!(Δv, l, _normalized(Δ))
+function _accumulate_cotangent!(Δv, l::ParameterLayout, Δ)
+    _accumulate!(Δv, l, _normalized(Δ), storage_gradient)
+end
 
 _normalized(Δ::ChainRulesCore.AbstractThunk) = _normalized(ChainRulesCore.unthunk(Δ))
 _normalized(::ChainRulesCore.AbstractZero) = nothing
 _normalized(::Nothing) = nothing
 _normalized(Δ) = Δ
 
-function _accumulate!(Δv, l::ParametersLayout, Δ)
+function _accumulate!(Δv, l::ParametersLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate!(Δv, l.inner, _normalized(_unwrap_parameters(Δ)))
+    _accumulate!(Δv, l.inner, _normalized(_unwrap_parameters(Δ)), _leaf_conversion(g, Δ))
 end
 
-function _accumulate!(Δv, l::NestedLayout, Δ)
+_leaf_conversion(g::G, _) where {G} = g
+_leaf_conversion(_, ::NetworkParameters) = _is_storage_gradient
+_is_storage_gradient(_, Δ) = Δ
+
+function _accumulate!(Δv, l::NestedLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate_named!(Δv, l.children, _cotangent_backing(Δ))
+    _accumulate_named!(Δv, l.children, _cotangent_backing(Δ), g)
     Δv
 end
 
-function _accumulate!(Δv, l::TupleLayout, Δ)
+function _accumulate!(Δv, l::TupleLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate_positional!(Δv, l.children, _cotangent_backing(Δ))
+    _accumulate_positional!(Δv, l.children, _cotangent_backing(Δ), g)
     Δv
 end
 
-function _accumulate!(Δv, l::WrappedLayout, Δ)
+function _accumulate!(Δv, l::WrappedLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    Δs = storage_gradient(l.prototype, Δ)
-    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δs)))
+    Δs = g(l.prototype, Δ)
+    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δs)), g)
 end
 
-function _accumulate!(Δv, l::LeafLayout, Δ)
+function _accumulate!(Δv, l::LeafLayout, Δ, _)
     Δ === nothing && return Δv
     _add_leaf_cotangent!(Δv, l, Δ)
     Δv
@@ -110,9 +120,9 @@ end
 # walk here that had to be rewritten. The two positional walks below are not: their length is the
 # number of *blocks of a single leaf* — two for a `StiefelLieAlgHorMatrix`, one for a Grassmann lift —
 # so they stay the chain they read best as.
-@generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ) where {Keys}
+@generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ, g) where {Keys}
     calls = [:(_accumulate!(Δv, getfield(children, $i),
-                 _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i]))))))
+                 _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i])))), g))
              for i in 1:length(Keys)]
     quote
         $(calls...)
@@ -123,10 +133,10 @@ end
 # The positional walk consumes the cotangent alongside the layout rather than indexing into it, so it
 # needs no index to be constant. `_cotangent_head`/`_cotangent_tail` carry the two cases a position
 # can be in.
-@inline _accumulate_positional!(Δv, ::Tuple{}, Δ) = nothing
-@inline function _accumulate_positional!(Δv, ls::Tuple, Δ)
-    _accumulate!(Δv, first(ls), _normalized(_cotangent_head(Δ)))
-    _accumulate_positional!(Δv, Base.tail(ls), _cotangent_tail(Δ))
+@inline _accumulate_positional!(Δv, ::Tuple{}, Δ, _) = nothing
+@inline function _accumulate_positional!(Δv, ls::Tuple, Δ, g::G) where {G}
+    _accumulate!(Δv, first(ls), _normalized(_cotangent_head(Δ)), g)
+    _accumulate_positional!(Δv, Base.tail(ls), _cotangent_tail(Δ), g)
 end
 
 _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::Number) = (Δv[first(l.range)] += Δ; nothing)
@@ -270,12 +280,19 @@ function _map_cotangent(f::F, x::Tuple, Δ) where {F}
 end
 
 # A set inside a set: its gradient is a set too. Zygote hands its cotangent over as the structural
-# `(params = …,)`, and a gradient already rewrapped arrives as the type itself.
+# `(params = …,)`, and a gradient already rewrapped arrives as the type itself. That one comes from the
+# `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already, so
+# `storage_gradient` leaves it as it is.
 function _map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
+    _map_parameters_cotangent(f, x, Δ)
+end
+
+function _map_parameters_cotangent(f::F, x, Δ) where {F}
     NetworkParameters(_map_cotangent(f, params(x), _unwrap_parameters(Δ)))
 end
+_map_parameters_cotangent(::typeof(storage_gradient), _, Δ::NetworkParameters) = Δ
 
 function _map_cotangent(f::F, x, Δ) where {F}
     Δ = _normalized(Δ)
