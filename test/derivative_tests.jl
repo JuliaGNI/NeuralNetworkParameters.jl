@@ -428,6 +428,20 @@ end
     @test STORAGE_GRADIENT_CALLS[] == 1
 end
 
+@testset "the `unflatten` rule reads each shape of a set's cotangent ($T)" for T in (Float32, Float64)
+    # a `Tangent` from Zygote, the set itself from the `flatten` rule, and the structural `NamedTuple`
+    ps = sample_network(T)
+    v, l = flatten(ps)
+    _, pb = ChainRulesCore.rrule(unflatten, l, v)
+    Δ = unflatten(l, collect(T, 1:length(v)))
+    expected = collect(T, 1:length(v))
+    @test pb(Δ)[3] == expected
+    @test pb((params = params(Δ),))[3] == expected
+    @test pb(ChainRulesCore.Tangent{Any}(params = ChainRulesCore.Tangent{Any}(;
+        params(Δ)...)))[3] ==
+          expected
+end
+
 @testset "the storage gradient is not applied to a structural tangent" begin
     # a loss reading the storage field directly gets ∂L/∂S from Zygote already, as a tangent over the
     # leaf's fields; the default method passes it through
