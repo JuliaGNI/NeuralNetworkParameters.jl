@@ -43,7 +43,7 @@ export NetworkParameters, params
 
 include("parameters.jl")
 
-export freeparameters, rebuild, parameter_metadata, parameter_eltype
+export freeparameters, rebuild, storage_gradient, parameter_metadata, parameter_eltype
 
 include("leaves.jl")
 

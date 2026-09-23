@@ -1,64 +1,54 @@
 module ZygoteRulesExt
 
 using NeuralNetworkParameters
-using NeuralNetworkParameters: NetworkParameters, params
+using NeuralNetworkParameters: NetworkParameters, params, storage_gradient, _map_cotangent
 import ZygoteRules
 
-# Differentiating a function of a `NetworkParameters` gives a gradient of the same shape.
+# Differentiating a function of a `NetworkParameters` calls it with the `NetworkParameters` itself and
+# gives a gradient of the same shape.
 #
-# Without this, the reverse pass sees an ordinary struct and hands back a tangent for it — a
-# `NamedTuple` whose one field is the wrapped `NamedTuple` — so the gradient of a parameter set is not
-# a parameter set and cannot be fed back to anything expecting one. Differentiating with respect to
-# the `NamedTuple` and rewrapping the result afterwards keeps the two shapes in step.
+# Zygote's generic method differentiates straight through the wrapper — `getproperty`, `values` and
+# `getindex` all reduce to `getfield(ps, :params)` — and hands back the structural tangent of the
+# struct, a `NamedTuple` whose one field is the tangent of the wrapped `NamedTuple`. This method
+# rewraps that tangent, so the gradient of a parameter set is a parameter set, and converts the
+# cotangent of each structured leaf to the gradient with respect to its storage.
 #
-# This method belongs here rather than in `AbstractNeuralNetworks`: with the parameter type defined
-# in this package, `ZygoteRules.pullback` is the only foreign name in the signature, and a method
-# needs to own just one of them.
+# `invoke` names Zygote's generic `pullback(f, args...)`, which this package does not own;
+# `test/derivative_tests.jl` pins its signature. `f::Function` and not `f`: with an untyped `f`, the
+# call `pullback(cx::Context, f)` would match this method as well as Zygote's.
 function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
-    y, pb = ZygoteRules.pullback(f, NamedTuple{keys(ps)}(values(ps)))
-
-    function network_parameters_pullback(output)
-        (_rewrap(ps, pb(output)[1]),)
-    end
-
+    y, pb = invoke(ZygoteRules.pullback, Tuple{Any, Vararg{Any}}, f, ps)
+    network_parameters_pullback(Δ) = (_rewrap(ps, pb(Δ)[1]),)
     y, network_parameters_pullback
 end
 
-# The reverse pass ran against `NamedTuple{keys(ps)}`, so what it hands back is keyed by the set's own
-# layers already and goes into the wrapper as it stands.
-#
-# The set's keys are asked about *first*, and that ordering is the point rather than an accident. A set
-# whose one layer is called `params` is an ordinary set — `getproperty` reaches into the wrapped
-# `NamedTuple`, so the field itself is read with `params(ps)` and the name is free for a layer — and
-# its tangent is indistinguishable from the structural one below. Told apart by shape alone it was
-# unwrapped a level too far, and the gradient came back with that layer's own shape lost, silently and
-# without an error.
-#
-# Both questions are answered at compile time: the keys of a `NamedTuple` and of a `NetworkParameters`
-# are type parameters, so neither the comparison nor the `isa` survives into the reverse pass.
-function _rewrap(ps::NetworkParameters, p̄::NamedTuple)
-    keys(p̄) === keys(ps) && return NetworkParameters(p̄)
-    # A tangent built for the *struct* instead, whose one field is the wrapped `NamedTuple`: unwrap it
-    # and ask the same question of what is inside.
-    p̄ isa NamedTuple{(:params,)} && return _rewrap(ps, p̄.params)
-    _rewrap_error(ps, p̄)
+# The structural tangent: the natural cotangent of each leaf, converted to its storage gradient once,
+# after Zygote has added the contributions of every use of the leaf. A layer named `params` is no
+# ambiguity here, because the wrapper's field is always the outer one.
+function _rewrap(ps::NetworkParameters, p̄::NamedTuple{(:params,)})
+    NetworkParameters(_map_cotangent(storage_gradient, params(ps), p̄.params))
 end
 
-# A reverse pass that touched none of the parameters hands back a structural zero for the whole set,
-# and there is nothing to rewrap: `keys(ps)` has as many entries as the set has layers and one
-# `nothing` cannot stand for each of them. So the hole is passed straight out, which is what Zygote
-# gives for the bare `NamedTuple` — a loss reading only the layout, or a frozen sub-network, would
-# otherwise raise where the unwrapped parameters return `nothing`.
+# A `NetworkParameters` comes from a rule that writes the gradient itself, `flatten`'s, whose leaves
+# hold the gradient with respect to the storage already.
+_rewrap(::NetworkParameters, p̄::NetworkParameters) = p̄
+
+# A reverse pass that touched none of the parameters.
 _rewrap(::NetworkParameters, ::Nothing) = nothing
 
-_rewrap(ps::NetworkParameters, p̄) = _rewrap_error(ps, p̄)
+# `p.L1` on a `NetworkParameters`. Zygote reads a field of a struct with `literal_getfield` only for a
+# type that keeps Base's `getproperty`; for this one it differentiates the overload itself, with the
+# name as a runtime `Symbol`, and the forward pass does not infer. The forward pass of a loss that
+# reads its layers with `p.L1` is then slower and allocates more than with this adjoint, which makes it
+# as fast as on the bare `NamedTuple`. The tangent is the structural one, keyed by every layer, with
+# `nothing` for the layers not read.
+ZygoteRules.@adjoint function ZygoteRules.literal_getproperty(
+        p::NetworkParameters{T, Keys}, ::Val{s}) where {T, Keys, s}
+    getproperty(p, s), Δ -> ((params = _one_hot(NamedTuple{Keys}, Val(s), Δ),), nothing)
+end
 
-# Naming both shapes, where spreading the tangent over `keys(ps)` would raise about a length — or,
-# for a set of one layer, not raise at all.
-@noinline function _rewrap_error(ps, p̄)
-    throw(ArgumentError(string("the reverse pass returned a `", typeof(p̄),
-        "` for parameters keyed ", keys(ps),
-        "; expected a `NamedTuple` over those keys, or `nothing`")))
+@generated function _one_hot(::Type{NamedTuple{Keys}}, ::Val{s}, Δ) where {Keys, s}
+    :(NamedTuple{Keys}(($((k === s ? :Δ : :nothing for k in Keys)...),)))
 end
 
 end

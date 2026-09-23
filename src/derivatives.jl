@@ -61,38 +61,49 @@ _flat_cotangent(Δ::ChainRulesCore.Tangent) = _normalized(first(ChainRulesCore.b
 # `nothing` itself rather than leaving it to dispatch: a method specialising on the cotangent as well as
 # the layout would be ambiguous with the per-layout ones, and a missing branch would then fail where a
 # missing leaf did not.
+#
+# The walk carries the conversion `g` it applies at a structured leaf: `storage_gradient` for the natural
+# cotangent that AD gives, and the identity below a `NetworkParameters` cotangent. That one comes from
+# the `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already.
 # ---------------------------------------------------------------------------------------------------
 
-_accumulate_cotangent!(Δv, l::ParameterLayout, Δ) = _accumulate!(Δv, l, _normalized(Δ))
+function _accumulate_cotangent!(Δv, l::ParameterLayout, Δ)
+    _accumulate!(Δv, l, _normalized(Δ), storage_gradient)
+end
 
 _normalized(Δ::ChainRulesCore.AbstractThunk) = _normalized(ChainRulesCore.unthunk(Δ))
 _normalized(::ChainRulesCore.AbstractZero) = nothing
 _normalized(::Nothing) = nothing
 _normalized(Δ) = Δ
 
-function _accumulate!(Δv, l::ParametersLayout, Δ)
+function _accumulate!(Δv, l::ParametersLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate!(Δv, l.inner, _normalized(_unwrap_parameters(Δ)))
+    _accumulate!(Δv, l.inner, _normalized(_unwrap_parameters(Δ)), _leaf_conversion(g, Δ))
 end
 
-function _accumulate!(Δv, l::NestedLayout, Δ)
+_leaf_conversion(g::G, _) where {G} = g
+_leaf_conversion(_, ::NetworkParameters) = _is_storage_gradient
+_is_storage_gradient(_, Δ) = Δ
+
+function _accumulate!(Δv, l::NestedLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate_named!(Δv, l.children, _cotangent_backing(Δ))
+    _accumulate_named!(Δv, l.children, _cotangent_backing(Δ), g)
     Δv
 end
 
-function _accumulate!(Δv, l::TupleLayout, Δ)
+function _accumulate!(Δv, l::TupleLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate_positional!(Δv, l.children, _cotangent_backing(Δ))
+    _accumulate_positional!(Δv, l.children, _cotangent_backing(Δ), g)
     Δv
 end
 
-function _accumulate!(Δv, l::WrappedLayout, Δ)
+function _accumulate!(Δv, l::WrappedLayout, Δ, g::G) where {G}
     Δ === nothing && return Δv
-    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δ)))
+    Δs = g(l.prototype, Δ)
+    _accumulate!(Δv, l.inner, _normalized(_wrapped_storage(l.prototype, Δs)), g)
 end
 
-function _accumulate!(Δv, l::LeafLayout, Δ)
+function _accumulate!(Δv, l::LeafLayout, Δ, _)
     Δ === nothing && return Δv
     _add_leaf_cotangent!(Δv, l, Δ)
     Δv
@@ -109,9 +120,9 @@ end
 # walk here that had to be rewritten. The two positional walks below are not: their length is the
 # number of *blocks of a single leaf* — two for a `StiefelLieAlgHorMatrix`, one for a Grassmann lift —
 # so they stay the chain they read best as.
-@generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ) where {Keys}
+@generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ, g) where {Keys}
     calls = [:(_accumulate!(Δv, getfield(children, $i),
-                 _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i]))))))
+                 _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i])))), g))
              for i in 1:length(Keys)]
     quote
         $(calls...)
@@ -122,10 +133,10 @@ end
 # The positional walk consumes the cotangent alongside the layout rather than indexing into it, so it
 # needs no index to be constant. `_cotangent_head`/`_cotangent_tail` carry the two cases a position
 # can be in.
-@inline _accumulate_positional!(Δv, ::Tuple{}, Δ) = nothing
-@inline function _accumulate_positional!(Δv, ls::Tuple, Δ)
-    _accumulate!(Δv, first(ls), _normalized(_cotangent_head(Δ)))
-    _accumulate_positional!(Δv, Base.tail(ls), _cotangent_tail(Δ))
+@inline _accumulate_positional!(Δv, ::Tuple{}, Δ, _) = nothing
+@inline function _accumulate_positional!(Δv, ls::Tuple, Δ, g::G) where {G}
+    _accumulate!(Δv, first(ls), _normalized(_cotangent_head(Δ)), g)
+    _accumulate_positional!(Δv, Base.tail(ls), _cotangent_tail(Δ), g)
 end
 
 _add_leaf_cotangent!(Δv, l::LeafLayout, Δ::Number) = (Δv[first(l.range)] += Δ; nothing)
@@ -147,17 +158,14 @@ function _add_leaf_cotangent!(_, ::LeafLayout, Δ)
         "the reverse pass produced a tangent for.")))
 end
 
-# A cotangent for a `NetworkParameters` arrives either as the type itself, or — when the reverse pass
-# built it structurally — as a tangent whose single field is the wrapped `NamedTuple`.
+# A cotangent for a `NetworkParameters` arrives as the structural tangent of the wrapper, whose single
+# field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` in Zygote's own reverse
+# pass over a set nested in a set — or as the type itself, which is what the `flatten` rule returns.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
 _unwrap_parameters(Δ::NamedTuple{(:params,)}) = Δ.params
-_unwrap_parameters(Δ) = _unwrap_parameters_backing(_cotangent_backing(Δ))
-
-_unwrap_parameters_backing(nt::NamedTuple{(:params,)}) = nt.params
-_unwrap_parameters_backing(nt) = nt
+_unwrap_parameters(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ).params
 
 _cotangent_backing(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ)
-_cotangent_backing(Δ::NetworkParameters) = params(Δ)
 _cotangent_backing(Δ) = Δ
 
 # Anything the cotangent is silent about becomes `nothing`, i.e. a structural zero.
@@ -245,3 +253,97 @@ end
 @inline _matching_positional(::Tuple{}, _) = ()
 @inline _matching_positional(storage::Tuple, Δ) = (
     _cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)
+
+# ---------------------------------------------------------------------------------------------------
+# A cotangent tree, leaf by leaf against the parameters
+#
+# `_map_cotangent(f, ps, Δ)` walks the branches of the primal `ps` and the cotangent `Δ` together and
+# returns the cotangent with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero,
+# at a leaf or at a whole branch — comes back as `nothing` and `f` never sees it. The result has the
+# shape Zygote gives a `NamedTuple`: keyed by the primal's keys, `nothing` where nothing was touched.
+#
+# Both callers run once per reverse pass: the `ZygoteRules` extension with `storage_gradient`, and
+# `ProjectTo(::NetworkParameters)` with each leaf's projection. So the named walk is written out for
+# the reason `_accumulate_named!` is.
+# ---------------------------------------------------------------------------------------------------
+
+function _map_cotangent(f::F, x::NamedTuple, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    _map_cotangent_named(f, x, _cotangent_backing(Δ))
+end
+
+function _map_cotangent(f::F, x::Tuple, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    _map_cotangent_positional(f, x, _cotangent_backing(Δ))
+end
+
+# A set inside a set: its gradient is a set too. Zygote hands its cotangent over as the structural
+# `(params = …,)`, and a gradient already rewrapped arrives as the type itself. That one comes from the
+# `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already, so
+# `storage_gradient` leaves it as it is.
+function _map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    _map_parameters_cotangent(f, x, Δ)
+end
+
+function _map_parameters_cotangent(f::F, x, Δ) where {F}
+    NetworkParameters(_map_cotangent(f, params(x), _unwrap_parameters(Δ)))
+end
+_map_parameters_cotangent(::typeof(storage_gradient), _, Δ::NetworkParameters) = Δ
+
+function _map_cotangent(f::F, x, Δ) where {F}
+    Δ = _normalized(Δ)
+    Δ === nothing && return nothing
+    f(x, Δ)
+end
+
+@generated function _map_cotangent_named(f, x::NamedTuple{Keys}, Δ) where {Keys}
+    children = [:(_map_cotangent(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
+                for i in 1:length(Keys)]
+    :(NamedTuple{Keys}(($(children...),)))
+end
+
+@inline _map_cotangent_positional(f, ::Tuple{}, Δ) = ()
+@inline _map_cotangent_positional(f, xs::Tuple, Δ) = (
+    _map_cotangent(f, first(xs), _cotangent_head(Δ)),
+    _map_cotangent_positional(f, Base.tail(xs), _cotangent_tail(Δ))...)
+
+# `Zygote.gradient` projects its result with `ProjectTo` of the argument. For a `NetworkParameters` that
+# is the projection of each leaf, as it is for the `NamedTuple` inside: a leaf read twice gets a dense
+# `Matrix` cotangent, and its own projection gives back the leaf's type. Only an array or a number is
+# projected. A structural tangent over a leaf's fields is a tangent already, and `ProjectTo` of an
+# array does not accept one in the shape Zygote gives it, a `NamedTuple`.
+function ChainRulesCore.ProjectTo(ps::NetworkParameters)
+    ChainRulesCore.ProjectTo{NetworkParameters}(; params = params(ps))
+end
+
+function (project::ChainRulesCore.ProjectTo{NetworkParameters})(Δ::NetworkParameters)
+    NetworkParameters(_map_cotangent(_project_leaf, project.params, params(Δ)))
+end
+
+_project_leaf(x, Δ::Union{AbstractArray, Number}) = ChainRulesCore.ProjectTo(x)(Δ)
+_project_leaf(_, Δ) = Δ
+
+# Two gradients of one set add leaf by leaf, with `nothing` a zero. Zygote adds the cotangents of the
+# uses of an argument with `+`, and a loss that calls `flatten` twice has two `NetworkParameters` from
+# the `flatten` rule to add. A leaf adds at the level of its storage, as `mapstorage` does, so a
+# structured leaf stays one rather than becoming the sum of two dense interfaces.
+function Base.:+(a::NetworkParameters, b::NetworkParameters)
+    NetworkParameters(_add_cotangents(
+        params(a), params(b)))
+end
+
+function _add_cotangents(a::NamedTuple{Keys}, b::NamedTuple{Keys}) where {Keys}
+    map(_add_cotangents, a, b)
+end
+_add_cotangents(a::Tuple, b::Tuple) = map(_add_cotangents, a, b)
+_add_cotangents(a::NetworkParameters, b::NetworkParameters) = a + b
+_add_cotangents(a, b) = _add_leaves(a, b)
+
+_add_leaves(::Nothing, ::Nothing) = nothing
+_add_leaves(::Nothing, b) = b
+_add_leaves(a, ::Nothing) = a
+_add_leaves(a, b) = mapstorage(+, a, b)
