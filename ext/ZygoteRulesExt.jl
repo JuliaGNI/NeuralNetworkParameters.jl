@@ -38,10 +38,10 @@ _rewrap(::NetworkParameters, ::Nothing) = nothing
 
 # `p.L1` on a `NetworkParameters`. Zygote reads a field of a struct with `literal_getfield` only for a
 # type that keeps Base's `getproperty`; for this one it differentiates the overload itself, with the
-# name as a runtime `Symbol`, and the forward pass does not infer. Measured on a three-layer loss that
-# reads its layers with `p.L1`: 4.3 μs and 32 kB for the forward pass that way, against 0.2 μs and
-# 4 kB with this adjoint — the time the same loss takes on the bare `NamedTuple`. The tangent is the
-# structural one, keyed by every layer, with `nothing` for the layers not read.
+# name as a runtime `Symbol`, and the forward pass does not infer. The forward pass of a loss that
+# reads its layers with `p.L1` is then slower and allocates more than with this adjoint, which makes it
+# as fast as on the bare `NamedTuple`. The tangent is the structural one, keyed by every layer, with
+# `nothing` for the layers not read.
 ZygoteRules.@adjoint function ZygoteRules.literal_getproperty(
         p::NetworkParameters{T, Keys}, ::Val{s}) where {T, Keys, s}
     getproperty(p, s), Δ -> ((params = _one_hot(NamedTuple{Keys}, Val(s), Δ),), nothing)

@@ -21,13 +21,11 @@ returns `(nothing,)`.
 - **A layer named `params` keeps its shape.** The gradient is rewrapped from the structural tangent
   of the wrapper, whose own field is always the outer one, so the collision that 0.3.0 describes
   does not arise.
-
 - **A loss that uses both `flatten(p)` and field access (e.g. `p.L1.W`) now raises `MethodError`.**
   The `flatten` rule returns a gradient in storage coordinates; field access returns the
   structural tangent. Zygote cannot add them. This is deliberate: a silent wrong value is worse
   than a loud error. A loss must choose one path: either flatten the whole set, or read fields,
   not both.
-
 - **The pullback of `ChainRulesCore.rrule(unflatten, …)` no longer accepts a cotangent for the
   whole set keyed by its layers.** It accepts the structural tangent of the wrapper, whose one field
   is `params` — a `Tangent`, which is what Zygote passes, or a `NamedTuple` — and a
@@ -41,27 +39,27 @@ returns `(nothing,)`.
   leaf into the gradient with respect to the leaf's storage — e.g. for a symmetric matrix, the
   off-diagonal entries are G_ij + G_ji. Called once per leaf, on the accumulated cotangent, where
   an AD cotangent becomes a parameter gradient: the gradient that the `ZygoteRules` extension
-  returns, and the flat gradient from the `unflatten` rule. The default is the identity;
-  `GeometricOptimizers` adds the methods for `SymmetricMatrix` and `SkewSymMatrix`. The extension
-  converts the gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a `Function`
-  `f` and a set that is the only argument. A call with a further argument, a callable struct for
-  `f`, or a set held inside another argument returns the structural tangent `(params = …,)` with
-  the natural cotangent at each leaf, as 0.3.0 does. A set nested in a set gets the conversion too,
-  and its gradient is a `NetworkParameters`.
+  returns, and the flat gradient from the `unflatten` rule. It is not called for a leaf of the
+  `NetworkParameters` that the `flatten` rule returns, which holds the storage
+  gradient already. The default is the identity; `GeometricOptimizers` adds the
+  methods for `SymmetricMatrix` and `SkewSymMatrix`. The extension converts the
+  gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a
+  `Function` `f` and a set that is the only argument. A call with a further
+  argument, a callable struct for `f`, or a set held inside another argument
+  returns the structural tangent `(params = …,)` with the natural cotangent at
+  each leaf, as 0.3.0 does. A set nested in a set gets the conversion too, and
+  its gradient is a `NetworkParameters`.
 - **`+` for two `NetworkParameters`**, leaf by leaf and at the level of each leaf's storage, with
   `nothing` a zero. Zygote adds two gradients from the `flatten` rule with it, so a loss that calls
   `flatten(p)` twice differentiates.
-
 - **`ChainRulesCore.ProjectTo(::NetworkParameters)`, matching the leaf protocol.** Projects leaf
   by leaf; holes stay `nothing`, structural tangents are left alone. With it a structured leaf
   read twice, whose cotangent is a dense array, keeps its own type when that type has a
   `ProjectTo`.
-
 - **A Zygote adjoint for `literal_getproperty` on `NetworkParameters`.** Reading a layer with
   `p.L1` now infers and costs what it costs on the bare `NamedTuple`, rather than dispatching on
   a runtime `Symbol`. Against 0.3.0 the pullback and its reverse pass take the same time on a
-  three-layer loss (0.4 μs) and on an eight-layer loop (36 μs); the reverse pass allocates 128 and
-  752 bytes more.
+  three-layer loss, and the reverse pass allocates 128 bytes more.
 
 ## [0.3.0] — 2026-08-29
 
