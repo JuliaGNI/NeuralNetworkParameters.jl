@@ -267,13 +267,17 @@ end
 
 Walk the branches of the primal `ps` and of its cotangent `Δ` together, and return the cotangent
 with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero, at a leaf or at a
-whole branch — comes back as `nothing`, and `f` never sees it. The result has the shape Zygote gives
-the primal: keyed by the primal's keys for a `NamedTuple`, positional for a `Tuple`, a
+whole branch — comes back as `nothing`, and `f` never sees it. The result has the shape of the
+primal: keyed by the primal's keys for a `NamedTuple`, positional for a `Tuple`, a
 `NetworkParameters` for a `NetworkParameters`, and `nothing` where nothing was touched.
 
-`Δ` is the cotangent of `ps` itself, in the shape Zygote gives it. The walk does not check the shape:
-a cotangent of a different tree, such as a `NetworkParameters` gradient passed against `params(ps)`,
-reaches every leaf whole.
+`Δ` is the cotangent of `ps` itself, in the shape Zygote gives it. The walk does not check the shape,
+so a cotangent of a different tree gives a wrong result and no error. At a `NamedTuple` branch, a
+`NamedTuple` cotangent is read by key, and a key it lacks gives `nothing`, a zero gradient. At a
+`Tuple` branch, a `Tuple` cotangent is read by position, and runs out into `nothing`. Any other
+cotangent goes whole to every child of the branch. So `(params = …,)` passed against `params(ps)` is
+`nothing` at every leaf, and a `NetworkParameters` gradient passed against `params(ps)` goes whole to
+`f` at each leaf.
 
 With `f = `[`storage_gradient`](@ref), this converts the natural cotangent Zygote gives a parameter
 set to its gradient with respect to the storage of each leaf. A package that writes its own
