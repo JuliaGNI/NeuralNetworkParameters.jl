@@ -121,8 +121,10 @@ read with [`freeparameters`](@ref) on the flat path, so a method returns a leaf 
 # Extending
 
 ```julia
-# a `SymmetricMatrix` whose storage is the lower triangle of `G + transpose(G)`, diagonal counted once
-NeuralNetworkParameters.storage_gradient(A::SymmetricMatrix, G::AbstractMatrix) = ...
+function NeuralNetworkParameters.storage_gradient(A::SymmetricMatrix, G::AbstractMatrix)
+    # a `SymmetricMatrix` whose storage is the lower triangle of `G + transpose(G)`, with the
+    # diagonal counted once
+end
 ```
 """
 storage_gradient(leaf, Δ) = Δ

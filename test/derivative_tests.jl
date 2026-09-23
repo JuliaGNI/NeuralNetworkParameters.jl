@@ -267,7 +267,7 @@ end
     ps = sample_network(T)
     x = T[1, 2]
     f = p -> network_loss(p, x)
-    y, pb = @inferred Zygote.pullback(f, ps)
+    _, pb = @inferred Zygote.pullback(f, ps)
     @test @inferred(pb(one(T))) isa Tuple{NetworkParameters{T}}
 end
 
