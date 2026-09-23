@@ -28,10 +28,11 @@ returns `(nothing,)`.
   than a loud error. A loss must choose one path: either flatten the whole set, or read fields,
   not both.
 
-- **The pullback of `ChainRulesCore.rrule(unflatten, …)` accepts two shapes of cotangent for the
-  whole set**: a `Tangent` whose one field is `params`, which is what Zygote passes, and a
+- **The pullback of `ChainRulesCore.rrule(unflatten, …)` no longer accepts a cotangent for the
+  whole set keyed by its layers.** It accepts the structural tangent of the wrapper, whose one field
+  is `params` — a `Tangent`, which is what Zygote passes, or a `NamedTuple` — and a
   `NetworkParameters`, which is what the `flatten` rule returns. A caller that invokes the rule
-  directly with a bare `NamedTuple`, keyed by the layers or by `params`, wraps it in one of these.
+  directly with a `NamedTuple` keyed by the layers wraps it as `(params = nt,)`.
 
 ### Added
 
