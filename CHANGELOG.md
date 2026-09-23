@@ -4,6 +4,15 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — targeting 0.4.1
+
+### Added
+
+- **`map_cotangent(f, ps, Δ)` is now public (not exported).** The internal `_map_cotangent` walk is
+  renamed, documented, and listed on the leaf protocol page, so packages writing `ZygoteRules.pullback`
+  for functions of a parameter set can convert the natural cotangent of each leaf to its storage
+  gradient instead of reaching an internal name.
+
 ## [0.4.0] — 2026-09-23
 
 **The `NetworkParameters` wrapper now differentiates directly.** Under Zygote,

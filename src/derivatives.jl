@@ -257,23 +257,50 @@ end
 # ---------------------------------------------------------------------------------------------------
 # A cotangent tree, leaf by leaf against the parameters
 #
-# `_map_cotangent(f, ps, Δ)` walks the branches of the primal `ps` and the cotangent `Δ` together and
-# returns the cotangent with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero,
-# at a leaf or at a whole branch — comes back as `nothing` and `f` never sees it. The result has the
-# shape Zygote gives a `NamedTuple`: keyed by the primal's keys, `nothing` where nothing was touched.
-#
-# Both callers run once per reverse pass: the `ZygoteRules` extension with `storage_gradient`, and
-# `ProjectTo(::NetworkParameters)` with each leaf's projection. So the named walk is written out for
-# the reason `_accumulate_named!` is.
+# The callers in this package run once per reverse pass: the `ZygoteRules` extension with
+# `storage_gradient`, and `ProjectTo(::NetworkParameters)` with each leaf's projection. So the named
+# walk is written out for the reason `_accumulate_named!` is.
 # ---------------------------------------------------------------------------------------------------
 
-function _map_cotangent(f::F, x::NamedTuple, Δ) where {F}
+"""
+    map_cotangent(f, ps, Δ)
+
+Walk the branches of the primal `ps` and of its cotangent `Δ` together, and return the cotangent
+with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero, at a leaf or at a
+whole branch — comes back as `nothing`, and `f` never sees it. The result has the shape Zygote gives
+the primal: keyed by the primal's keys for a `NamedTuple`, positional for a `Tuple`, a
+`NetworkParameters` for a `NetworkParameters`, and `nothing` where nothing was touched.
+
+`Δ` is the cotangent of `ps` itself, in the shape Zygote gives it. The walk does not check the shape:
+a cotangent of a different tree, such as a `NetworkParameters` gradient passed against `params(ps)`,
+reaches every leaf whole.
+
+With `f = `[`storage_gradient`](@ref), this converts the natural cotangent Zygote gives a parameter
+set to its gradient with respect to the storage of each leaf. A package that writes its own
+`ZygoteRules.pullback` for a function of a parameter set calls it on the cotangent of the set:
+
+```julia
+y, pb = ZygoteRules.pullback(g, x, values(ps))
+function g_pullback(ȳ)
+    x̄, p̄ = pb(ȳ)
+    p̄ = map_cotangent(storage_gradient, values(ps), p̄)
+    x̄, p̄ === nothing ? nothing : NetworkParameters(NamedTuple{keys(ps)}(p̄))
+end
+```
+
+A `NetworkParameters` inside `Δ` holds the storage gradient at every leaf already — it is what the
+reverse rule of [`flatten`](@ref) returns — so `map_cotangent(storage_gradient, …)` returns it as it
+is.
+"""
+function map_cotangent end
+
+function map_cotangent(f::F, x::NamedTuple, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
     _map_cotangent_named(f, x, _cotangent_backing(Δ))
 end
 
-function _map_cotangent(f::F, x::Tuple, Δ) where {F}
+function map_cotangent(f::F, x::Tuple, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
     _map_cotangent_positional(f, x, _cotangent_backing(Δ))
@@ -283,32 +310,32 @@ end
 # `(params = …,)`, and a gradient already rewrapped arrives as the type itself. That one comes from the
 # `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already, so
 # `storage_gradient` leaves it as it is.
-function _map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
+function map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
     _map_parameters_cotangent(f, x, Δ)
 end
 
 function _map_parameters_cotangent(f::F, x, Δ) where {F}
-    NetworkParameters(_map_cotangent(f, params(x), _unwrap_parameters(Δ)))
+    NetworkParameters(map_cotangent(f, params(x), _unwrap_parameters(Δ)))
 end
 _map_parameters_cotangent(::typeof(storage_gradient), _, Δ::NetworkParameters) = Δ
 
-function _map_cotangent(f::F, x, Δ) where {F}
+function map_cotangent(f::F, x, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
     f(x, Δ)
 end
 
 @generated function _map_cotangent_named(f, x::NamedTuple{Keys}, Δ) where {Keys}
-    children = [:(_map_cotangent(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
+    children = [:(map_cotangent(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
                 for i in 1:length(Keys)]
     :(NamedTuple{Keys}(($(children...),)))
 end
 
 @inline _map_cotangent_positional(f, ::Tuple{}, Δ) = ()
 @inline _map_cotangent_positional(f, xs::Tuple, Δ) = (
-    _map_cotangent(f, first(xs), _cotangent_head(Δ)),
+    map_cotangent(f, first(xs), _cotangent_head(Δ)),
     _map_cotangent_positional(f, Base.tail(xs), _cotangent_tail(Δ))...)
 
 # `Zygote.gradient` projects its result with `ProjectTo` of the argument. For a `NetworkParameters` that
@@ -321,7 +348,7 @@ function ChainRulesCore.ProjectTo(ps::NetworkParameters)
 end
 
 function (project::ChainRulesCore.ProjectTo{NetworkParameters})(Δ::NetworkParameters)
-    NetworkParameters(_map_cotangent(_project_leaf, project.params, params(Δ)))
+    NetworkParameters(map_cotangent(_project_leaf, project.params, params(Δ)))
 end
 
 _project_leaf(x, Δ::Union{AbstractArray, Number}) = ChainRulesCore.ProjectTo(x)(Δ)
