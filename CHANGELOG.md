@@ -4,7 +4,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeting 0.4.1
+## [0.4.1] — 2026-09-24
 
 ### Added
 
