@@ -547,13 +547,16 @@ end
     @test map_cotangent(storage_gradient, ps, tp) isa NetworkParameters{T}
     # a `Tangent` with no fields is a zero, a hole wherever it stands: a set, a branch, a leaf; and so
     # is the structural tangent of a set whose `params` is a zero
-    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
-    @test map_cotangent(storage_gradient, ps, empty(ps)) === nothing
-    @test map_cotangent(storage_gradient, params(ps), empty(params(ps))) === nothing
-    @test map_cotangent(storage_gradient, values(ps), empty(values(ps))) === nothing
-    @test map_cotangent(storage_gradient, values(ps), (Δ[1], (S = empty(ps.L2.S),)))[2].S ===
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test map_cotangent(storage_gradient, ps, empty_tangent(ps)) === nothing
+    @test map_cotangent(storage_gradient, params(ps), empty_tangent(params(ps))) === nothing
+    @test map_cotangent(storage_gradient, values(ps), empty_tangent(values(ps))) === nothing
+    @test map_cotangent(
+        storage_gradient, values(ps), (Δ[1], (S = empty_tangent(ps.L2.S),)))[2].S ===
           nothing
     @test map_cotangent(storage_gradient, ps, (params = nothing,)) === nothing
+    tz = ChainRulesCore.Tangent{typeof(ps)}(; params = ChainRulesCore.ZeroTangent())
+    @test map_cotangent(storage_gradient, ps, tz) === nothing
 end
 
 # The reverse rule of `unflatten` reads a set's cotangent with the same rule: its three shapes, a
@@ -566,15 +569,16 @@ end
     keyed = NamedTuple{keys(ps)}(values(g))
     @test pb(g)[3] == v
     tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
-    @test pb((params = keyed,))[3] ≈ pb(tp)[3]
+    @test pb((params = keyed,))[3] == pb(tp)[3]
     @test pb(ChainRulesCore.Tangent{typeof(ps)}())[3] == zero(v)
     @test_throws ArgumentError pb(keyed)
     @test_throws ArgumentError pb(values(g))
     # a `Tangent` with no fields at a leaf is a zero block there, as `nothing` is
-    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
     b̄ = ps.L1.b
-    @test pb((params = (L1 = (W = empty(ps.L1.W), b = b̄), L2 = nothing),))[3] ==
-          pb((params = (L1 = (W = nothing, b = b̄), L2 = nothing),))[3]
+    @test pb((params = (L1 = (W = empty_tangent(ps.L1.W), b = b̄), L2 = nothing),))[3] ==
+          pb((params = (L1 = (W = nothing, b = b̄), L2 = nothing),))[3] ==
+          [zero(vec(ps.L1.W)); b̄; zero(ps.L2.S.S)]
 end
 
 # The reverse rule of `flatten` reads the cotangent of the pair `(v, layout)` by the same rule: a
@@ -582,9 +586,9 @@ end
 @testset "the flatten rule reads an empty `Tangent` as a zero ($T)" for T in (Float32, Float64)
     ps = sym_network(T)
     (v, l), fpb = ChainRulesCore.rrule(flatten, ps)
-    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
-    @test fpb(empty((v, l)))[2] == ChainRulesCore.ZeroTangent()
-    @test fpb((empty(v), nothing))[2] == ChainRulesCore.ZeroTangent()
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test fpb(empty_tangent((v, l)))[2] == ChainRulesCore.ZeroTangent()
+    @test fpb((empty_tangent(v), nothing))[2] == ChainRulesCore.ZeroTangent()
     @test flatten(fpb((v, nothing))[2])[1] == v
 end
 
