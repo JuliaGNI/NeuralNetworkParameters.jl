@@ -23,7 +23,7 @@ function ChainRulesCore.rrule(::typeof(flatten), ::Type{T}, ps) where {T}
     v, layout = flatten(T, ps)
 
     function flatten_pullback(Δ)
-        Δv = _flat_cotangent(ChainRulesCore.unthunk(Δ))
+        Δv = _flat_cotangent(_normalized(Δ))
         Δps = Δv === nothing ? ChainRulesCore.ZeroTangent() : unflatten(layout, Δv)
         ChainRulesCore.NoTangent(), ChainRulesCore.NoTangent(), Δps
     end
@@ -40,12 +40,9 @@ end
 # `flatten` returns a tuple, so its cotangent is a tangent *for the tuple*; only the first component,
 # the one for the flat vector, carries anything.
 #
-# `nothing` is a structural zero here as it is everywhere else in this file — the convention
-# `_normalized` states. Zygote converts one to a `ZeroTangent` before it reaches an `rrule`, so this
-# method is for a caller that invokes the rule directly; without it the two spellings of "no
-# derivative" disagree, and only the one Zygote does not use raises.
+# The cotangent is put through `_normalized` first, as everywhere else in this file, so every flavour
+# of zero for the pair — `nothing`, a `ZeroTangent`, a `Tangent` with no fields — is `nothing` here.
 _flat_cotangent(::Nothing) = nothing
-_flat_cotangent(Δ::ChainRulesCore.AbstractZero) = nothing
 _flat_cotangent(Δ::Tuple) = _normalized(first(Δ))
 _flat_cotangent(Δ::ChainRulesCore.Tangent) = _normalized(first(ChainRulesCore.backing(Δ)))
 
@@ -71,9 +68,15 @@ function _accumulate_cotangent!(Δv, l::ParameterLayout, Δ)
     _accumulate!(Δv, l, _normalized(Δ), storage_gradient)
 end
 
+# A `Tangent` with no fields is a zero too: `Tangent{P}()` is backed by `()` for a `Tuple` primal and
+# by an empty `NamedTuple` for any other.
+const _EmptyTangent = ChainRulesCore.Tangent{
+    <:Any, <:Union{Tuple{}, NamedTuple{(), Tuple{}}}}
+
 _normalized(Δ::ChainRulesCore.AbstractThunk) = _normalized(ChainRulesCore.unthunk(Δ))
 _normalized(::ChainRulesCore.AbstractZero) = nothing
 _normalized(::Nothing) = nothing
+_normalized(::_EmptyTangent) = nothing
 _normalized(Δ) = Δ
 
 function _accumulate!(Δv, l::ParametersLayout, Δ, g::G) where {G}
@@ -161,14 +164,13 @@ end
 # A cotangent for a `NetworkParameters` arrives as the structural tangent of the wrapper, whose single
 # field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` in Zygote's own reverse
 # pass over a set nested in a set — or as the type itself, which is what the `flatten` rule returns.
-# A `Tangent` with no fields is a zero, as it is at a `NamedTuple` branch. Anything else is the
-# cotangent of another tree, which both walks reject.
+# Anything else is the cotangent of another tree, which both walks reject. A `Tangent` with no fields
+# is a zero, and `_normalized` has made it `nothing` before it gets here.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
 _unwrap_parameters(Δ::NamedTuple{(:params,)}) = Δ.params
 function _unwrap_parameters(Δ::ChainRulesCore.Tangent{<:Any, <:NamedTuple{(:params,)}})
     ChainRulesCore.backing(Δ).params
 end
-_unwrap_parameters(::ChainRulesCore.Tangent{<:Any, NamedTuple{(), Tuple{}}}) = nothing
 function _unwrap_parameters(Δ)
     throw(_shape_error("that is a `NetworkParameters`, whose cotangent is `(params = …,)`",
         _type_of(Δ)))
@@ -275,19 +277,20 @@ end
     map_cotangent(f, ps, Δ)
 
 Walk the branches of the primal `ps` and of its cotangent `Δ` together, and return the cotangent
-with `f(leaf, Δleaf)` at each leaf. A hole — `nothing` or any flavour of zero, at a leaf or at a
-whole branch — comes back as `nothing`, and `f` never sees it. The result has the shape of the
-primal: keyed by the primal's keys for a `NamedTuple`, positional for a `Tuple`, a
-`NetworkParameters` for a `NetworkParameters`, and `nothing` where nothing was touched.
+with `f(leaf, Δleaf)` at each leaf. A hole — `nothing`, any flavour of zero, or a `Tangent` with no
+fields, at a leaf, a whole branch or a whole set — comes back as `nothing`, and `f` never sees it.
+The result has the shape of the primal: keyed by the primal's keys for a `NamedTuple`, positional
+for a `Tuple`, a `NetworkParameters` for a `NetworkParameters`, and `nothing` where nothing was
+touched.
 
 `Δ` is the cotangent of `ps` itself, in the shape Zygote gives it, and a cotangent of another shape
 raises an `ArgumentError` at the first branch it does not fit. At a `NamedTuple` branch the cotangent
 is a `NamedTuple`, or a `Tangent` over one, whose keys are keys of the branch; a key it leaves out is
 a hole, as a field left out of a `Tangent` is. At a `Tuple` branch it is a `Tuple` of the same
 length, or a `Tangent` over one. At a `NetworkParameters` it is the set's structural tangent
-`(params = …,)`, as a `NamedTuple` or a `Tangent`, or a `NetworkParameters`; a `Tangent` with no
-fields is a zero there, as it is at a `NamedTuple` branch. So `(params = …,)` passed against
-`params(ps)` raises, and so does a `NetworkParameters` gradient passed against `params(ps)`.
+`(params = …,)`, as a `NamedTuple` or a `Tangent`, or a `NetworkParameters`. So `(params = …,)`
+passed against `params(ps)` raises, and so does a `NetworkParameters` gradient passed against
+`params(ps)`.
 
 With `f = `[`storage_gradient`](@ref), this converts the natural cotangent Zygote gives a parameter
 set to its gradient with respect to the storage of each leaf. A package that writes its own

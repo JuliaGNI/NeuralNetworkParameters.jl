@@ -15,15 +15,19 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   structure: at a `NamedTuple` branch, a `NamedTuple` or `Tangent` whose keys are keys of the
   branch (missing keys are holes); at a `Tuple` branch, a `Tuple` or `Tangent` of the same
   length; at a set, the structural tangent `(params = …,)` as a `NamedTuple` or `Tangent`, or
-  a `NetworkParameters`. A `Tangent` with no fields is a zero, at a set as at a `NamedTuple`
-  branch. Anything else raises an `ArgumentError` at the first branch it does not fit.
+  a `NetworkParameters`. A `Tangent` with no fields is a hole wherever it stands, at a set, a
+  branch or a leaf. Anything else raises an `ArgumentError` at the first branch it does not fit.
 
 ### Fixed
 
 - **The reverse rule of `unflatten` reads a set's cotangent by the same rule.** A `Tangent` with no
   fields for a `NetworkParameters` gives a zero gradient where it raised `FieldError`, and a
   cotangent of another shape for a set, such as a `NamedTuple` keyed by the layers, raises an
-  `ArgumentError` that names both shapes where it raised `MethodError`.
+  `ArgumentError` that names both shapes where it raised `MethodError`. A `Tangent` with no fields
+  at an array leaf gives a zero block where it raised `ArgumentError`.
+- **The reverse rule of `flatten` reads a `Tangent` with no fields as no derivative**, for the pair
+  `(v, layout)` and for the vector alike, and returns `ZeroTangent()`. It raised `ArgumentError`
+  for the pair and `MethodError` for the vector.
 - **A set whose structural tangent holds a zero is untouched.** The cotangent walk gives `nothing`
   for a set with `(params = nothing,)`, or a `Tangent` with `params = ZeroTangent()`, where it
   raised `MethodError: no method matching NetworkParameters(::Nothing)`.

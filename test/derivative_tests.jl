@@ -545,10 +545,14 @@ end
     @test map_cotangent(storage_gradient, ps, g) === g
     tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
     @test map_cotangent(storage_gradient, ps, tp) isa NetworkParameters{T}
-    # a `Tangent` with no fields is a zero, for a set as for a `NamedTuple` branch, and so is the
-    # structural tangent of a set whose `params` is a zero
-    empty = ChainRulesCore.Tangent{typeof(ps)}()
-    @test map_cotangent(storage_gradient, ps, empty) === nothing
+    # a `Tangent` with no fields is a zero, a hole wherever it stands: a set, a branch, a leaf; and so
+    # is the structural tangent of a set whose `params` is a zero
+    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test map_cotangent(storage_gradient, ps, empty(ps)) === nothing
+    @test map_cotangent(storage_gradient, params(ps), empty(params(ps))) === nothing
+    @test map_cotangent(storage_gradient, values(ps), empty(values(ps))) === nothing
+    @test map_cotangent(storage_gradient, values(ps), (Δ[1], (S = empty(ps.L2.S),)))[2].S ===
+          nothing
     @test map_cotangent(storage_gradient, ps, (params = nothing,)) === nothing
 end
 
@@ -566,6 +570,22 @@ end
     @test pb(ChainRulesCore.Tangent{typeof(ps)}())[3] == zero(v)
     @test_throws ArgumentError pb(keyed)
     @test_throws ArgumentError pb(values(g))
+    # a `Tangent` with no fields at a leaf is a zero block there, as `nothing` is
+    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
+    b̄ = ps.L1.b
+    @test pb((params = (L1 = (W = empty(ps.L1.W), b = b̄), L2 = nothing),))[3] ==
+          pb((params = (L1 = (W = nothing, b = b̄), L2 = nothing),))[3]
+end
+
+# The reverse rule of `flatten` reads the cotangent of the pair `(v, layout)` by the same rule: a
+# `Tangent` with no fields, for the pair or for the vector, is no derivative.
+@testset "the flatten rule reads an empty `Tangent` as a zero ($T)" for T in (Float32, Float64)
+    ps = sym_network(T)
+    (v, l), fpb = ChainRulesCore.rrule(flatten, ps)
+    empty(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test fpb(empty((v, l)))[2] == ChainRulesCore.ZeroTangent()
+    @test fpb((empty(v), nothing))[2] == ChainRulesCore.ZeroTangent()
+    @test flatten(fpb((v, nothing))[2])[1] == v
 end
 
 @testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)
