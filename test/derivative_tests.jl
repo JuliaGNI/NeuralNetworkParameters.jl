@@ -508,6 +508,45 @@ end
     @test ḡ[2] === nothing
 end
 
+# A cotangent of another tree is an error at the first branch it does not fit, not a zero or a
+# non-gradient at every leaf.
+@testset "map_cotangent rejects a cotangent of another shape ($T)" for T in (Float32, Float64)
+    map_cotangent = NeuralNetworkParameters.map_cotangent
+    ps = sym_network(T)
+    x = T[1, -2]
+    f(layers) = sum(tanh.(layers[2].S * tanh.(layers[1].W * x .+ layers[1].b)))
+    Δ = Zygote.pullback(f, values(ps))[2](one(T))[1]
+    g = Zygote.gradient(p -> f(values(p)), ps)[1]
+    keyed = NamedTuple{keys(ps)}(Δ)
+    # a set's gradient, or the layers in order, against the layers by name
+    @test_throws ArgumentError map_cotangent(storage_gradient, params(ps), g)
+    @test_throws ArgumentError map_cotangent(storage_gradient, params(ps), Δ)
+    # the wrapper's structural tangent against the layers by name: a key the branch does not have
+    @test_throws ArgumentError map_cotangent(storage_gradient, params(ps), (params = keyed,))
+    # the layers by name against the layers in order, and too few layers
+    @test_throws ArgumentError map_cotangent(storage_gradient, values(ps), keyed)
+    @test_throws ArgumentError map_cotangent(storage_gradient, values(ps), (Δ[1],))
+    # the layers in order as a `Tangent` read as the bare `Tuple` does, and too few of them raise
+    tt = ChainRulesCore.Tangent{typeof(values(ps))}(Δ...)
+    @test map_cotangent(storage_gradient, values(ps), tt)[2].S.S ==
+          map_cotangent(storage_gradient, values(ps), Δ)[2].S.S
+    @test_throws ArgumentError map_cotangent(storage_gradient, values(ps),
+        ChainRulesCore.Tangent{typeof(values(ps))}(Δ[1]))
+    # the layers by name against the set itself, which takes its structural tangent `(params = …,)`
+    @test_throws ArgumentError map_cotangent(storage_gradient, ps, keyed)
+    # an array where a layer is
+    @test_throws ArgumentError map_cotangent(storage_gradient, values(ps), (Δ[1], Δ[2].S))
+    # a named cotangent silent about a key is a hole there, as a `Tangent` with a field left out is
+    @test map_cotangent(storage_gradient, params(ps), (L2 = Δ[2],)).L1 === nothing
+    t = ChainRulesCore.Tangent{typeof(params(ps))}(; L2 = Δ[2])
+    @test map_cotangent(storage_gradient, params(ps), t).L2.S isa Sym{T}
+    # the three shapes a set's cotangent comes in
+    @test map_cotangent(storage_gradient, ps, (params = keyed,)) isa NetworkParameters{T}
+    @test map_cotangent(storage_gradient, ps, g) === g
+    tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
+    @test map_cotangent(storage_gradient, ps, tp) isa NetworkParameters{T}
+end
+
 @testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)
     a = NetworkParameters((t = (T[1, 2], Sym(T[1, 2, 3], 2)),
         sub = NetworkParameters((L1 = (W = T[1 2], b = T[4]),))))

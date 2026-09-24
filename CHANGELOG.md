@@ -11,7 +11,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - **`map_cotangent(f, ps, Δ)` is now public (not exported).** The internal `_map_cotangent` walk is
   renamed, documented, and listed on the leaf protocol page, so packages writing `ZygoteRules.pullback`
   for functions of a parameter set can convert the natural cotangent of each leaf to its storage
-  gradient instead of reaching an internal name.
+  gradient instead of reaching an internal name. A cotangent must match the primal's
+  structure: at a `NamedTuple` branch, a `NamedTuple` or `Tangent` whose keys are keys of the
+  branch (missing keys are holes); at a `Tuple` branch, a `Tuple` or `Tangent` of the same
+  length; at a set, the structural tangent `(params = …,)` as a `NamedTuple` or `Tangent`, or
+  a `NetworkParameters`. Anything else raises an `ArgumentError` at the first branch it does
+  not fit.
 
 ## [0.4.0] — 2026-09-23
 
