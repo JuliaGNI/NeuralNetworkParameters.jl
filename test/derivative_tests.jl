@@ -119,6 +119,27 @@ end
     @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
 end
 
+# A rule may hand the set back its structural tangent with a zero inside, `(params = nothing,)`. That
+# is a set the reverse pass never touched too.
+untouching(p) = 1.0
+ZygoteRules.@adjoint function untouching(p::NetworkParameters)
+    untouching(p), _ -> ((params = nothing,),)
+end
+
+# A rule that gives the set a zero, where Zygote's own pullback then gives `nothing` for the whole
+# tuple of arguments.
+zeroing(p) = 1.0
+function ChainRulesCore.rrule(::typeof(zeroing), p::NetworkParameters)
+    zeroing(p), _ -> (ChainRulesCore.NoTangent(), ChainRulesCore.ZeroTangent())
+end
+
+@testset "a structural tangent holding a zero comes back as `nothing`" begin
+    @test Zygote.pullback(untouching, ps)[2](1.0) === (nothing,)
+    @test Zygote.gradient(untouching, ps) === (nothing,)
+    @test Zygote.pullback(zeroing, ps)[2](1.0) === (nothing,)
+    @test Zygote.gradient(p -> untouching(p) + sum(p.L1.W), ps)[1].L1.W == ones(2, 2)
+end
+
 @testset "`nothing` is a structural zero for the `flatten` rules too" begin
     # `_normalized` is explicit that `nothing` means "no derivative"; the `flatten` pullback took
     # `ZeroTangent` and not `nothing`, so the two spellings disagreed on the one path Zygote does not

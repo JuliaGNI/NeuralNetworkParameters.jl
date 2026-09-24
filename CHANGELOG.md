@@ -28,9 +28,14 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - **The reverse rule of `flatten` reads a `Tangent` with no fields as no derivative**, for the pair
   `(v, layout)` and for the vector alike, and returns `ZeroTangent()`. It raised `ArgumentError`
   for the pair and `MethodError` for the vector.
-- **A set whose structural tangent holds a zero is untouched.** The cotangent walk gives `nothing`
-  for a set with `(params = nothing,)`, or a `Tangent` with `params = ZeroTangent()`, where it
-  raised `MethodError: no method matching NetworkParameters(::Nothing)`.
+- **A set whose structural tangent holds a zero is untouched.** `Zygote.pullback(f, ps)` and
+  `Zygote.gradient(f, ps)` give `nothing` for a set whose reverse pass returns `(params = nothing,)`,
+  and the cotangent walk does for that and for a `Tangent` with `params = ZeroTangent()`. Both
+  raised `MethodError: no method matching NetworkParameters(::Nothing)`. The same holds for a set
+  that an `rrule` gives `ZeroTangent()`, where Zygote's pullback returns `nothing` for the whole
+  tuple of arguments; that raised `MethodError: no method matching getindex(::Nothing, ::Int64)`.
+  The `ZygoteRules` extension now rewraps a set's gradient with `map_cotangent`, which reads every
+  shape of a set's cotangent by one rule.
 
 ## [0.4.0] — 2026-09-23
 

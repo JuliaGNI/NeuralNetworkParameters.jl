@@ -162,8 +162,9 @@ function _add_leaf_cotangent!(_, ::LeafLayout, Δ)
 end
 
 # A cotangent for a `NetworkParameters` arrives as the structural tangent of the wrapper, whose single
-# field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` in Zygote's own reverse
-# pass over a set nested in a set — or as the type itself, which is what the `flatten` rule returns.
+# field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` from Zygote's own reverse
+# pass, for the set a loss differentiates and for a set nested in it — or as the type itself, which is
+# what the `flatten` rule returns.
 # Anything else is the cotangent of another tree, which both walks reject. A `Tangent` with no fields
 # is a zero, and `_normalized` has made it `nothing` before it gets here.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
@@ -348,10 +349,10 @@ end
 _type_of(Δ) = "of type `$(typeof(Δ))`"
 _positions(x::Tuple) = length(x) == 1 ? "with 1 position" : "with $(length(x)) positions"
 
-# A set inside a set: its gradient is a set too. Zygote hands its cotangent over as the structural
-# `(params = …,)`, and a gradient already rewrapped arrives as the type itself. That one comes from the
-# `flatten` rule, or from `+` of two such, and holds the storage gradient at every leaf already, so
-# `storage_gradient` leaves it as it is.
+# A set, the one a loss differentiates or one inside it: its gradient is a set too. Zygote hands its
+# cotangent over as the structural `(params = …,)`, and a gradient already rewrapped arrives as the
+# type itself. That one comes from the `flatten` rule, or from `+` of two such, and holds the storage
+# gradient at every leaf already, so `storage_gradient` leaves it as it is.
 function map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
     Δ = _normalized(Δ)
     Δ === nothing && return nothing
