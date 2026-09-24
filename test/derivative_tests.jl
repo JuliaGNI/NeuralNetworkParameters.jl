@@ -119,6 +119,27 @@ end
     @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
 end
 
+# A rule may hand the set back its structural tangent with a zero inside, `(params = nothing,)`. That
+# is a set the reverse pass never touched too.
+untouching(p) = 1.0
+ZygoteRules.@adjoint function untouching(p::NetworkParameters)
+    untouching(p), _ -> ((params = nothing,),)
+end
+
+# A rule that gives the set a zero, where Zygote's own pullback then gives `nothing` for the whole
+# tuple of arguments.
+zeroing(p) = 1.0
+function ChainRulesCore.rrule(::typeof(zeroing), p::NetworkParameters)
+    zeroing(p), _ -> (ChainRulesCore.NoTangent(), ChainRulesCore.ZeroTangent())
+end
+
+@testset "a structural tangent holding a zero comes back as `nothing`" begin
+    @test Zygote.pullback(untouching, ps)[2](1.0) === (nothing,)
+    @test Zygote.gradient(untouching, ps) === (nothing,)
+    @test Zygote.pullback(zeroing, ps)[2](1.0) === (nothing,)
+    @test Zygote.gradient(p -> untouching(p) + sum(p.L1.W), ps)[1].L1.W == ones(2, 2)
+end
+
 @testset "`nothing` is a structural zero for the `flatten` rules too" begin
     # `_normalized` is explicit that `nothing` means "no derivative"; the `flatten` pullback took
     # `ZeroTangent` and not `nothing`, so the two spellings disagreed on the one path Zygote does not
@@ -545,6 +566,51 @@ end
     @test map_cotangent(storage_gradient, ps, g) === g
     tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
     @test map_cotangent(storage_gradient, ps, tp) isa NetworkParameters{T}
+    # a `Tangent` with no fields is a zero, a hole wherever it stands: a set, a branch, a leaf; and so
+    # is the structural tangent of a set whose `params` is a zero
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test map_cotangent(storage_gradient, ps, empty_tangent(ps)) === nothing
+    @test map_cotangent(storage_gradient, params(ps), empty_tangent(params(ps))) === nothing
+    @test map_cotangent(storage_gradient, values(ps), empty_tangent(values(ps))) === nothing
+    @test map_cotangent(
+        storage_gradient, values(ps), (Δ[1], (S = empty_tangent(ps.L2.S),)))[2].S ===
+          nothing
+    @test map_cotangent(storage_gradient, ps, (params = nothing,)) === nothing
+    tz = ChainRulesCore.Tangent{typeof(ps)}(; params = ChainRulesCore.ZeroTangent())
+    @test map_cotangent(storage_gradient, ps, tz) === nothing
+end
+
+# The reverse rule of `unflatten` reads a set's cotangent with the same rule: its three shapes, a
+# `Tangent` with no fields as a zero, and anything else as an error.
+@testset "the unflatten rule reads a set's cotangent by the same rule ($T)" for T in (Float32, Float64)
+    ps = sym_network(T)
+    v, l = flatten(ps)
+    _, pb = ChainRulesCore.rrule(unflatten, l, v)
+    g = unflatten(l, v)
+    keyed = NamedTuple{keys(ps)}(values(g))
+    @test pb(g)[3] == v
+    tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
+    @test pb((params = keyed,))[3] == pb(tp)[3]
+    @test pb(ChainRulesCore.Tangent{typeof(ps)}())[3] == zero(v)
+    @test_throws ArgumentError pb(keyed)
+    @test_throws ArgumentError pb(values(g))
+    # a `Tangent` with no fields at a leaf is a zero block there, as `nothing` is
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
+    b̄ = ps.L1.b
+    @test pb((params = (L1 = (W = empty_tangent(ps.L1.W), b = b̄), L2 = nothing),))[3] ==
+          pb((params = (L1 = (W = nothing, b = b̄), L2 = nothing),))[3] ==
+          [zero(vec(ps.L1.W)); b̄; zero(ps.L2.S.S)]
+end
+
+# The reverse rule of `flatten` reads the cotangent of the pair `(v, layout)` by the same rule: a
+# `Tangent` with no fields, for the pair or for the vector, is no derivative.
+@testset "the flatten rule reads an empty `Tangent` as a zero ($T)" for T in (Float32, Float64)
+    ps = sym_network(T)
+    (v, l), fpb = ChainRulesCore.rrule(flatten, ps)
+    empty_tangent(x) = ChainRulesCore.Tangent{typeof(x)}()
+    @test fpb(empty_tangent((v, l)))[2] == ChainRulesCore.ZeroTangent()
+    @test fpb((empty_tangent(v), nothing))[2] == ChainRulesCore.ZeroTangent()
+    @test flatten(fpb((v, nothing))[2])[1] == v
 end
 
 @testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)

@@ -15,8 +15,27 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   structure: at a `NamedTuple` branch, a `NamedTuple` or `Tangent` whose keys are keys of the
   branch (missing keys are holes); at a `Tuple` branch, a `Tuple` or `Tangent` of the same
   length; at a set, the structural tangent `(params = …,)` as a `NamedTuple` or `Tangent`, or
-  a `NetworkParameters`. Anything else raises an `ArgumentError` at the first branch it does
-  not fit.
+  a `NetworkParameters`. A `Tangent` with no fields is a hole wherever it stands, at a set, a
+  branch or a leaf. Anything else raises an `ArgumentError` at the first branch it does not fit.
+
+### Fixed
+
+- **The reverse rule of `unflatten` reads a set's cotangent by the same rule.** A `Tangent` with no
+  fields for a `NetworkParameters` gives a zero gradient where it raised `FieldError`, and a
+  cotangent of another shape for a set, such as a `NamedTuple` keyed by the layers, raises an
+  `ArgumentError` that names both shapes where it raised `MethodError`. A `Tangent` with no fields
+  at an array leaf gives a zero block where it raised `ArgumentError`.
+- **The reverse rule of `flatten` reads a `Tangent` with no fields as no derivative**, for the pair
+  `(v, layout)` and for the vector alike, and returns `ZeroTangent()`. It raised `ArgumentError`
+  for the pair and `MethodError` for the vector.
+- **A set whose structural tangent holds a zero is untouched.** `Zygote.pullback(f, ps)` and
+  `Zygote.gradient(f, ps)` give `nothing` for a set whose reverse pass returns `(params = nothing,)`,
+  and the cotangent walk does for that and for a `Tangent` with `params = ZeroTangent()`. Both
+  raised `MethodError: no method matching NetworkParameters(::Nothing)`. The same holds for a set
+  that an `rrule` gives `ZeroTangent()`, where Zygote's pullback returns `nothing` for the whole
+  tuple of arguments; that raised `MethodError: no method matching getindex(::Nothing, ::Int64)`.
+  The `ZygoteRules` extension now rewraps a set's gradient with `map_cotangent`, which reads every
+  shape of a set's cotangent by one rule.
 
 ## [0.4.0] — 2026-09-23
 

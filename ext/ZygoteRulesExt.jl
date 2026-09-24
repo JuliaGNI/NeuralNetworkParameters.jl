@@ -1,7 +1,7 @@
 module ZygoteRulesExt
 
 using NeuralNetworkParameters
-using NeuralNetworkParameters: NetworkParameters, params, storage_gradient, map_cotangent
+using NeuralNetworkParameters: NetworkParameters, storage_gradient, map_cotangent
 import ZygoteRules
 
 # Differentiating a function of a `NetworkParameters` calls it with the `NetworkParameters` itself and
@@ -10,31 +10,26 @@ import ZygoteRules
 # Zygote's generic method differentiates straight through the wrapper — `getproperty`, `values` and
 # `getindex` all reduce to `getfield(ps, :params)` — and hands back the structural tangent of the
 # struct, a `NamedTuple` whose one field is the tangent of the wrapped `NamedTuple`. This method
-# rewraps that tangent, so the gradient of a parameter set is a parameter set, and converts the
-# cotangent of each structured leaf to the gradient with respect to its storage.
+# rewraps that tangent with `map_cotangent`, so the gradient of a parameter set is a parameter set, and
+# converts the cotangent of each structured leaf to the gradient with respect to its storage once,
+# after Zygote has added the contributions of every use of the leaf. The walk reads the other shapes
+# a set's cotangent comes in by the same rule: a `NetworkParameters`, which the `flatten` rule writes
+# with the storage gradient at every leaf already, comes back as it is, and a reverse pass that
+# touched none of the parameters, `nothing` or a structural tangent holding a zero, gives `nothing`.
+# A layer named `params` is no ambiguity, because the wrapper's field is always the outer one.
 #
 # `invoke` names Zygote's generic `pullback(f, args...)`, which this package does not own;
 # `test/derivative_tests.jl` pins its signature. `f::Function` and not `f`: with an untyped `f`, the
 # call `pullback(cx::Context, f)` would match this method as well as Zygote's.
 function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
     y, pb = invoke(ZygoteRules.pullback, Tuple{Any, Vararg{Any}}, f, ps)
-    network_parameters_pullback(Δ) = (_rewrap(ps, pb(Δ)[1]),)
+    network_parameters_pullback(Δ) = (map_cotangent(storage_gradient, ps, _set_cotangent(pb(Δ))),)
     y, network_parameters_pullback
 end
 
-# The structural tangent: the natural cotangent of each leaf, converted to its storage gradient once,
-# after Zygote has added the contributions of every use of the leaf. A layer named `params` is no
-# ambiguity here, because the wrapper's field is always the outer one.
-function _rewrap(ps::NetworkParameters, p̄::NamedTuple{(:params,)})
-    NetworkParameters(map_cotangent(storage_gradient, params(ps), p̄.params))
-end
-
-# A `NetworkParameters` comes from a rule that writes the gradient itself, `flatten`'s, whose leaves
-# hold the gradient with respect to the storage already.
-_rewrap(::NetworkParameters, p̄::NetworkParameters) = p̄
-
-# A reverse pass that touched none of the parameters.
-_rewrap(::NetworkParameters, ::Nothing) = nothing
+# Zygote's pullback gives `nothing` for the whole tuple of arguments when a rule gave the set a zero.
+_set_cotangent(::Nothing) = nothing
+_set_cotangent(Δs::Tuple) = first(Δs)
 
 # `p.L1` on a `NetworkParameters`. Zygote reads a field of a struct with `literal_getfield` only for a
 # type that keeps Base's `getproperty`; for this one it differentiates the overload itself, with the
