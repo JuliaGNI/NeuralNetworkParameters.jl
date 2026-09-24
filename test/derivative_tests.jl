@@ -526,6 +526,12 @@ end
     # the layers by name against the layers in order, and too few layers
     @test_throws ArgumentError map_cotangent(storage_gradient, values(ps), keyed)
     @test_throws ArgumentError map_cotangent(storage_gradient, values(ps), (Δ[1],))
+    # the layers in order as a `Tangent` read as the bare `Tuple` does, and too few of them raise
+    tt = ChainRulesCore.Tangent{typeof(values(ps))}(Δ...)
+    @test map_cotangent(storage_gradient, values(ps), tt)[2].S.S ==
+          map_cotangent(storage_gradient, values(ps), Δ)[2].S.S
+    @test_throws ArgumentError map_cotangent(storage_gradient, values(ps),
+        ChainRulesCore.Tangent{typeof(values(ps))}(Δ[1]))
     # the layers by name against the set itself, which takes its structural tangent `(params = …,)`
     @test_throws ArgumentError map_cotangent(storage_gradient, ps, keyed)
     # an array where a layer is
