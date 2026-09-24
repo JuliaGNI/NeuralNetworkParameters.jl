@@ -1,7 +1,7 @@
 module ZygoteRulesExt
 
 using NeuralNetworkParameters
-using NeuralNetworkParameters: NetworkParameters, params, storage_gradient, _map_cotangent
+using NeuralNetworkParameters: NetworkParameters, params, storage_gradient, map_cotangent
 import ZygoteRules
 
 # Differentiating a function of a `NetworkParameters` calls it with the `NetworkParameters` itself and
@@ -26,7 +26,7 @@ end
 # after Zygote has added the contributions of every use of the leaf. A layer named `params` is no
 # ambiguity here, because the wrapper's field is always the outer one.
 function _rewrap(ps::NetworkParameters, p̄::NamedTuple{(:params,)})
-    NetworkParameters(_map_cotangent(storage_gradient, params(ps), p̄.params))
+    NetworkParameters(map_cotangent(storage_gradient, params(ps), p̄.params))
 end
 
 # A `NetworkParameters` comes from a rule that writes the gradient itself, `flatten`'s, whose leaves

@@ -486,6 +486,28 @@ end
     @test Zygote.gradient(p -> sum(p.u.b), ps)[1].t === nothing
 end
 
+# A package that writes its own pullback for a function of the layers in order, `values(ps)`, gets
+# Zygote's natural cotangent of that tuple and converts it with the public walk.
+@testset "map_cotangent converts the cotangent of the layers in order ($T)" for T in (Float32, Float64)
+    @test Base.ispublic(NeuralNetworkParameters, :map_cotangent)
+    @test !Base.isexported(NeuralNetworkParameters, :map_cotangent)
+    ps = sym_network(T)
+    x = T[1, -2]
+    f(layers) = sum(tanh.(layers[2].S * tanh.(layers[1].W * x .+ layers[1].b)))
+    v, l = flatten(ps)
+    reference = ForwardDiff.gradient(w -> f(values(unflatten(l, w))), v)
+    Δ = Zygote.pullback(f, values(ps))[2](one(T))[1]
+    STORAGE_GRADIENT_CALLS[] = 0
+    g = NeuralNetworkParameters.map_cotangent(storage_gradient, values(ps), Δ)
+    @test STORAGE_GRADIENT_CALLS[] == 1
+    @test g[2].S isa Sym{T}
+    @test flatten(NetworkParameters(NamedTuple{keys(ps)}(g)))[1] ≈ reference
+    # a layer the function never reads is a hole
+    Δb = Zygote.pullback(layers -> sum(layers[1].b), values(ps))[2](one(T))[1]
+    ḡ = NeuralNetworkParameters.map_cotangent(storage_gradient, values(ps), Δb)
+    @test ḡ[2] === nothing
+end
+
 @testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)
     a = NetworkParameters((t = (T[1, 2], Sym(T[1, 2, 3], 2)),
         sub = NetworkParameters((L1 = (W = T[1 2], b = T[4]),))))

@@ -30,6 +30,13 @@ them: `GeometricOptimizers` owns them, `GeometricMachineLearning` uses them, and
 a list rather than a protocol would have to be written by somebody who owns neither the types nor the
 generic it dispatches on.
 
+A package that writes its own reverse rule for a function of a parameter set converts the cotangent
+of the whole set with one walk, which is public but not exported.
+
+```@docs
+map_cotangent
+```
+
 ## An example
 
 ```jldoctest protocol

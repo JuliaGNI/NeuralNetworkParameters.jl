@@ -70,6 +70,8 @@ include("io.jl")
 
 include("norms.jl")
 
+public map_cotangent
+
 include("derivatives.jl")
 
 end
