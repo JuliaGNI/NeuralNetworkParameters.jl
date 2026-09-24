@@ -161,9 +161,18 @@ end
 # A cotangent for a `NetworkParameters` arrives as the structural tangent of the wrapper, whose single
 # field is the wrapped `NamedTuple` — a `Tangent` in a rule, a `NamedTuple` in Zygote's own reverse
 # pass over a set nested in a set — or as the type itself, which is what the `flatten` rule returns.
+# A `Tangent` with no fields is a zero, as it is at a `NamedTuple` branch. Anything else is the
+# cotangent of another tree, which both walks reject.
 _unwrap_parameters(Δ::NetworkParameters) = params(Δ)
 _unwrap_parameters(Δ::NamedTuple{(:params,)}) = Δ.params
-_unwrap_parameters(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ).params
+function _unwrap_parameters(Δ::ChainRulesCore.Tangent{<:Any, <:NamedTuple{(:params,)}})
+    ChainRulesCore.backing(Δ).params
+end
+_unwrap_parameters(::ChainRulesCore.Tangent{<:Any, NamedTuple{(), Tuple{}}}) = nothing
+function _unwrap_parameters(Δ)
+    throw(_shape_error("that is a `NetworkParameters`, whose cotangent is `(params = …,)`",
+        _type_of(Δ)))
+end
 
 _cotangent_backing(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ)
 _cotangent_backing(Δ) = Δ
@@ -276,9 +285,9 @@ raises an `ArgumentError` at the first branch it does not fit. At a `NamedTuple`
 is a `NamedTuple`, or a `Tangent` over one, whose keys are keys of the branch; a key it leaves out is
 a hole, as a field left out of a `Tangent` is. At a `Tuple` branch it is a `Tuple` of the same
 length, or a `Tangent` over one. At a `NetworkParameters` it is the set's structural tangent
-`(params = …,)`, as a `NamedTuple` or a `Tangent`, or a `NetworkParameters`. So `(params = …,)`
-passed against `params(ps)` raises, and so does a `NetworkParameters` gradient passed against
-`params(ps)`.
+`(params = …,)`, as a `NamedTuple` or a `Tangent`, or a `NetworkParameters`; a `Tangent` with no
+fields is a zero there, as it is at a `NamedTuple` branch. So `(params = …,)` passed against
+`params(ps)` raises, and so does a `NetworkParameters` gradient passed against `params(ps)`.
 
 With `f = `[`storage_gradient`](@ref), this converts the natural cotangent Zygote gives a parameter
 set to its gradient with respect to the storage of each leaf. A package that writes its own
@@ -331,8 +340,7 @@ _checked_branch(x::Tuple, Δ) = throw(_shape_error(_positions(x), _type_of(Δ)))
 function _shape_error(branch, cotangent)
     ArgumentError(string(
         "cannot read a cotangent ", cotangent, " as the cotangent of a branch ",
-        branch, ". `map_cotangent` takes the cotangent of the primal itself, in the shape Zygote ",
-        "gives it."))
+        branch, ". The cotangent has the shape of the primal, as Zygote gives it."))
 end
 _type_of(Δ) = "of type `$(typeof(Δ))`"
 _positions(x::Tuple) = length(x) == 1 ? "with 1 position" : "with $(length(x)) positions"
@@ -347,17 +355,11 @@ function map_cotangent(f::F, x::NetworkParameters, Δ) where {F}
     _map_parameters_cotangent(f, x, Δ)
 end
 
-const _ParametersCotangent = Union{NetworkParameters, NamedTuple{(:params,)},
-    ChainRulesCore.Tangent{<:Any, <:NamedTuple{(:params,)}}}
-
-function _map_parameters_cotangent(f::F, x, Δ::_ParametersCotangent) where {F}
-    NetworkParameters(map_cotangent(f, params(x), _unwrap_parameters(Δ)))
+function _map_parameters_cotangent(f::F, x, Δ) where {F}
+    p̄ = map_cotangent(f, params(x), _unwrap_parameters(Δ))
+    p̄ === nothing ? nothing : NetworkParameters(p̄)
 end
 _map_parameters_cotangent(::typeof(storage_gradient), _, Δ::NetworkParameters) = Δ
-function _map_parameters_cotangent(_, _, Δ)
-    throw(_shape_error("that is a `NetworkParameters`, whose cotangent is `(params = …,)`",
-        _type_of(Δ)))
-end
 
 function map_cotangent(f::F, x, Δ) where {F}
     Δ = _normalized(Δ)

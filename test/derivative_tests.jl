@@ -545,6 +545,27 @@ end
     @test map_cotangent(storage_gradient, ps, g) === g
     tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
     @test map_cotangent(storage_gradient, ps, tp) isa NetworkParameters{T}
+    # a `Tangent` with no fields is a zero, for a set as for a `NamedTuple` branch, and so is the
+    # structural tangent of a set whose `params` is a zero
+    empty = ChainRulesCore.Tangent{typeof(ps)}()
+    @test map_cotangent(storage_gradient, ps, empty) === nothing
+    @test map_cotangent(storage_gradient, ps, (params = nothing,)) === nothing
+end
+
+# The reverse rule of `unflatten` reads a set's cotangent with the same rule: its three shapes, a
+# `Tangent` with no fields as a zero, and anything else as an error.
+@testset "the unflatten rule reads a set's cotangent by the same rule ($T)" for T in (Float32, Float64)
+    ps = sym_network(T)
+    v, l = flatten(ps)
+    _, pb = ChainRulesCore.rrule(unflatten, l, v)
+    g = unflatten(l, v)
+    keyed = NamedTuple{keys(ps)}(values(g))
+    @test pb(g)[3] == v
+    tp = ChainRulesCore.Tangent{typeof(ps)}(; params = keyed)
+    @test pb((params = keyed,))[3] ≈ pb(tp)[3]
+    @test pb(ChainRulesCore.Tangent{typeof(ps)}())[3] == zero(v)
+    @test_throws ArgumentError pb(keyed)
+    @test_throws ArgumentError pb(values(g))
 end
 
 @testset "a tuple branch and a nested set add leaf by leaf ($T)" for T in (Float32, Float64)
