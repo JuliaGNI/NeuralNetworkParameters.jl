@@ -100,7 +100,7 @@ dispatched argument type belong elsewhere. `L2norm` over a parameter set is ther
 `GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so an extension there was
 one nobody could exercise, and its assertion had to sit in `GeometricOptimizers`, two packages from
 the definition. It also depends on the leaf protocol and `foldparameters`, which are this package's to
-change. `test/geometric_base_tests.jl` covers it.
+change. `test/norms.jl` covers it.
 
 One package still carries a method on this package's types, as an extension on a weak dependency, so
 it costs nothing to a caller who does not load this one:
@@ -136,7 +136,7 @@ again on a tenth that had no column in the sweep.
 - **`NetworkParameters` is the type of a whole set of parameters, and the only one.** A *branch* of
   one is a plain `NamedTuple` and is a different question, answered by `isparametertree` — whose domain
   also admits a `Tuple`, because a `Tuple` is a branch the walks recurse into but never a set handed in
-  whole. `test/parameters_tests.jl` asserts both, separately, which is the shape of the distinction.
+  whole. `test/parameters.jl` asserts both, separately, which is the shape of the distinction.
 - **`NetworkParameters{T}` bounds neither the leaves' element type nor the depth**: its `T` is a
   *promotion* over the leaves. A caller wanting "flat, and every leaf an `AbstractArray{T}`" should not
   spell it as a `NamedTuple` bound: an alias for `Base.NamedTuple` is a type nobody owns, so a method
@@ -177,7 +177,7 @@ again on a tenth that had no column in the sweep.
   network is) pays where a 16 × 24 one does not.
 - **A `@generated` body may only call helpers defined above it in the file.** A generator runs in
   the world age of its own method definition. Precompilation hides a violation by giving every
-  method in a module one world age, so `test/world_age_tests.jl` runs the walks in a subprocess
+  method in a module one world age, so `test/world_age.jl` runs the walks in a subprocess
   under `--compiled-modules=no`, which is the only way to ask.
 - **The HDF5 writer records key order** as a group attribute. Older files — `ANN`'s attribute-less
   groups, `GML`'s `gml_type` tagging — still load, falling back to a regex guess that is guarded so
@@ -307,7 +307,7 @@ What the narrowing turned up, none of which was visible from the signatures:
   Making the wrap differentiable instead — so that `f` always sees a container — was tried and
   reverted. It collides with a set whose sole layer is named `params`: there the container tangent and
   the structural tangent are indistinguishable by shape, and the unwrap and `_rewrap` would have to
-  resolve the ambiguity in opposite directions. `test/derivative_tests.jl` pins that case, and it is
+  resolve the ambiguity in opposite directions. `test/derivatives.jl` pins that case, and it is
   the reason the seam stays where it is.
 
 - **A flat set is one cache's worth, not a tree.** `GeometricMachineLearning` asked "is this a
@@ -462,7 +462,7 @@ Rules, each of which cost a wrong committed figure to learn:
 The suite is about 45 s on Julia 1.13 and 1 m 45 s on 1.11, nearly all of it compiling the 369-child
 case — the width of GMLDatasets' MNIST transformer, which is the width a consumer has rather than
 the width that is convenient. It asserts properties and not timings, because a wall-clock bound
-would flake on a loaded machine; the regression test is that `test/wide_branch_tests.jl`
+would flake on a loaded machine; the regression test is that `test/wide_branches.jl`
 *completes*.
 
 Beyond round trips it covers: `Float32` fidelity; zero allocation for the in-place walks measured

@@ -19,7 +19,7 @@ import ZygoteRules
 # A layer named `params` is no ambiguity, because the wrapper's field is always the outer one.
 #
 # `invoke` names Zygote's generic `pullback(f, args...)`, which this package does not own;
-# `test/derivative_tests.jl` pins its signature. `f::Function` and not `f`: with an untyped `f`, the
+# `test/derivatives.jl` pins its signature. `f::Function` and not `f`: with an untyped `f`, the
 # call `pullback(cx::Context, f)` would match this method as well as Zygote's.
 function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
     y, pb = invoke(ZygoteRules.pullback, Tuple{Any, Vararg{Any}}, f, ps)

@@ -11,7 +11,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - **The test suite follows the test convention of the JuliaGNI packages.** The test dependencies are
   in `test/Project.toml`, and `Project.toml` has no `[extras]` or `[targets]`. `test/runtests.jl`
   runs the groups named in `ARGS`, `core` and `slow` when it is empty, with one `@safetestset` per
-  file. Each test file has the name of the source file it tests, and `wrapper_types.jl` is a helper
+  file. Each test of one source file has that file's name, and `wrapper_types.jl` is a helper
   under `test/helpers/`. New: `test/quality/aqua.jl` in `core`, and `test/quality/doctests.jl` in
   `slow`, which runs the doctests of the manual and the docstrings. No source file changes.
 
