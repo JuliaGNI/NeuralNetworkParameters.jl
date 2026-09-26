@@ -1,7 +1,7 @@
 using NeuralNetworkParameters
 using Test
 
-include("wrapper_types.jl")
+include("helpers/wrapper_types.jl")
 
 ps = sample_parameters()
 

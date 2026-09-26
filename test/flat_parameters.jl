@@ -1,7 +1,7 @@
 using NeuralNetworkParameters
 using Test
 
-include("wrapper_types.jl")
+include("helpers/wrapper_types.jl")
 
 ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],)))
 fp = FlatParameters(ps)
