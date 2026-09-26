@@ -5,7 +5,7 @@ using ZygoteRules
 using ChainRulesCore
 using Test
 
-include("wrapper_types.jl")
+include("helpers/wrapper_types.jl")
 
 ps = NetworkParameters((L1 = (W = [0.1 0.2; 0.3 0.4], b = [0.5, 0.6]),
     L2 = (W = [0.7 0.8], b = [0.9])))

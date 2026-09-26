@@ -47,7 +47,7 @@
 # `foldzip` are `foldparameters` at arity one and two; `tailfold` is the `Base.tail` recursion over
 # `values` that a consumer writes when the zipped fold does not exist, which is what
 # `GeometricOptimizers` wrote three of. The package's own fold was the one walk this sweep never timed
-# — `test/wide_branch_tests.jl` folds 369 children but asserts only the value, so what stood in for a
+# — `test/wide_branches.jl` folds 369 children but asserts only the value, so what stood in for a
 # figure was the suite's total wall clock. A column that is not swept is a column whose behaviour is
 # not known, which is D16 and D19's lesson pointed at an argument rather than at a clock.
 #
@@ -115,7 +115,7 @@ function first_call(f, args...)
     round((time_ns() - t) / 1e9; digits = 2)
 end
 
-# From inside a function, for the reason `test/flatten_tests.jl` gives: that is the claim that matters,
+# From inside a function, for the reason `test/flatten.jl` gives: that is the claim that matters,
 # an optimizer's inner loop rather than the top level of a script.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)

@@ -4,7 +4,7 @@ using NeuralNetworkParameters: freeparameters, rebuild, parameter_eltype,
                                isterminal, isparametertree
 using Test
 
-include("wrapper_types.jl")
+include("helpers/wrapper_types.jl")
 
 @testset "defaults for ordinary leaves" begin
     A = [1.0 2.0]

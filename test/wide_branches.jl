@@ -39,7 +39,7 @@ function nested_set(k)
         Tuple((W = fill(Float32(i), 2, 2), b = fill(Float32(i), 2)) for i in 1:k))
 end
 
-# Allocations are measured from inside a function throughout, for the reason `flatten_tests.jl` gives:
+# Allocations are measured from inside a function throughout, for the reason `flatten.jl` gives:
 # that is the claim that matters, an optimizer's inner loop rather than the top level of a testset.
 _flatten_allocs(buf, ps, layout) = @allocated flatten!(buf, ps, layout)
 _unflatten_allocs(dest, layout, v) = @allocated unflatten!(dest, layout, v)
@@ -272,7 +272,7 @@ _rrule_typed_allocs(ps) = @allocated ChainRulesCore.rrule(flatten, Float32, ps)
     end
 
     # and the answer is still a constant the compiler has: inference was never what allocated, so a
-    # fix that lost it would be a different regression. `<:` for the reason `leaves_tests.jl` gives
+    # fix that lost it would be a different regression. `<:` for the reason `leaves.jl` gives
     @test only(Base.return_types(parameter_eltype, Tuple{typeof(ps)})) <: Type{Float32}
     @test parameter_eltype(ps) === Float32
     @test parameter_eltype(tup) === Float32

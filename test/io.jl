@@ -3,7 +3,7 @@ using NeuralNetworkParameters: save, load, register_parameter_type!, PARAMETER_T
 using HDF5
 using Test
 
-include("wrapper_types.jl")
+include("helpers/wrapper_types.jl")
 
 register_parameter_type!("Sym", (S, md) -> Sym(S, md.n))
 register_parameter_type!("TwoBlock", (data, md) -> TwoBlock(data.A, data.B, md.N))
