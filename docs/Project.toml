@@ -9,4 +9,5 @@ NeuralNetworkParameters = {path = ".."}
 
 [compat]
 Documenter = "1"
+ForwardDiff = "1.4.6"
 HDF5 = "0.17.4"
