@@ -126,6 +126,7 @@ end
 @generated function _accumulate_named!(Δv, children::NamedTuple{Keys}, Δ, g) where {Keys}
     calls = [:(_accumulate!(Δv, getfield(children, $i),
                  _normalized(_cotangent_get(Δ, $(QuoteNode(Keys[i])))), g))
+    # fatou-ignore index-from-length
              for i in 1:length(Keys)]
     quote
         $(calls...)
@@ -373,6 +374,7 @@ end
 
 @generated function _map_cotangent_named(f, x::NamedTuple{Keys}, Δ) where {Keys}
     children = [:(map_cotangent(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
+    # fatou-ignore index-from-length
                 for i in 1:length(Keys)]
     :(NamedTuple{Keys}(($(children...),)))
 end

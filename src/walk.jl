@@ -504,6 +504,7 @@ end
     n = _children_arity(xs, rest)
     ks = _branch_keys(xs)
     calls = [Expr(:call, :_foreach_step, :f, :kind, :(getfield(xs, $i)),
+                 # fatou-ignore index-from-length
                  (_child_expr(ks, rest[j], j, i) for j in 1:length(rest))...) for i in 1:n]
     quote
         $(calls...)
@@ -563,6 +564,7 @@ end
     expr = :acc
     for i in 1:n
         expr = Expr(:call, :_fold_step, :op, :kind, expr, :(getfield(xs, $i)),
+            # fatou-ignore index-from-length
             (_child_expr(ks, rest[j], j, i) for j in 1:length(rest))...)
     end
     expr

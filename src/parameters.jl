@@ -1,3 +1,4 @@
+# fatou-ignore invalid-docstring-code
 @doc raw"""
     NetworkParameters(params::NamedTuple)
     NetworkParameters{T}(params::NamedTuple)
