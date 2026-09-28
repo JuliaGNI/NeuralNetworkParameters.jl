@@ -14,6 +14,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   file. Each test of one source file has that file's name, and `wrapper_types.jl` is a helper
   under `test/helpers/`. New: `test/quality/aqua.jl` in `core`, and `test/quality/doctests.jl` in
   `slow`, which runs the doctests of the manual and the docstrings. No source file changes.
+- **The empty-set test of `L2norm` asserts `=== false`**, the strong zero the fold starts from,
+  not `== false`, which `0.0` also passes. No source file changes.
 
 ## [0.4.1] — 2026-09-24
 

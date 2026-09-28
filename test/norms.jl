@@ -81,5 +81,5 @@ end
     @test l2norm(f32) isa Float32
     @test l2norm(f32) ≈ 5.0f0
 
-    @test L2norm(NetworkParameters(NamedTuple())) == false
+    @test L2norm(NetworkParameters(NamedTuple())) === false
 end
