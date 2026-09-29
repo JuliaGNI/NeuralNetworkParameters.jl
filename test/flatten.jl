@@ -158,3 +158,10 @@ end
     _allocs(lb, w)          # warm up both
     @test _allocs(lw, w) == _allocs(lb, w)
 end
+
+@testset "the empty set flattens to an empty vector" begin
+    v, layout = flatten(NetworkParameters(NamedTuple()))
+    @test v isa Vector{Union{}}
+    @test isempty(v)
+    @test length(layout) == 0
+end

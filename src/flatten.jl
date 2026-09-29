@@ -53,7 +53,7 @@ flatten(ps) = flatten(parameter_eltype(ps), ps)
 
 function flatten(::Type{T}, ps) where {T}
     layout = parameterlayout(ps)
-    T === Union{} && length(layout) > 0 && _no_element_type_error()
+    T === Union{} && !isempty(parameterrange(layout)) && _no_element_type_error()
     v = Vector{T}(undef, length(layout))
     flatten!(v, ps, layout)
     v, layout
