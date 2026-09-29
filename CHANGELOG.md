@@ -17,9 +17,10 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - **The empty-set test of `L2norm` asserts `=== false`**, the strong zero the fold starts from,
   not `== false`, which `0.0` also passes. No source file changes.
 - **`flatten` tests the emptiness of the layout through `isempty`**, on `parameterrange(layout)`,
-  with no change in behaviour. Six fatou findings are suppressed: four `index-from-length` in
-  `@generated` bodies and two `invalid-docstring-code` for the `...` placeholder in the
-  `NetworkParameters` docstring. A test for the empty set is added to `test/flatten.jl`.
+  with no change in behaviour. Four `@generated` bodies iterate `eachindex` in place of
+  `1:length`, over the same indices. Two `invalid-docstring-code` findings for the `...`
+  placeholder in the `NetworkParameters` docstring are suppressed. A test for the empty set is
+  added to `test/flatten.jl`.
 
 ## [0.4.1] — 2026-09-24
 
