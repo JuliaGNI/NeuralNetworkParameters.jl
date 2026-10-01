@@ -27,8 +27,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `foldparameters`, `foldstorage`, `parameter_eltype`, the `NetworkParameters` constructor,
   `flatten(ps)`, `flatten(T, ps)`, the `rrule` of each `flatten` method, and the pullback of the
   `unflatten` rule. Each has one line per element type that the tests pass to it directly
-  (`Float32`, `Float64`, and for some an `Int`, a `ForwardDiff.Dual` or the `Union{}` of a set
-  with no numeric leaf); all 37 lines report nothing. Where JET does not work, the file records
+  (`Float32`, `Float64`, and for some an `Int`, a `ForwardDiff.Dual` of `Float32` or `Float64`,
+  or the `Union{}` of a set with no numeric leaf); all 40 lines report nothing. Where JET does not work, the file records
   one `@test_skip`. JET is a new test dependency, with no `[compat]` bound.
 - **`test/Project.toml` and `docs/Project.toml` no longer bound a dependency of the package.** The
   `[compat]` entries for `ChainRulesCore`, `GeometricBase`, `HDF5` and `ZygoteRules` leave

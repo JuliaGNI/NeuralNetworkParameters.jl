@@ -50,7 +50,7 @@ if JET_WORKS
         noleaf = NetworkParameters(NamedTuple())
 
         # `flatten.jl` "the in-place forms do not allocate" (`Float64`); `wide_branches.jl` "the
-        # in-place forms do not allocate" (`Float32`)
+        # in-place forms do not allocate at $k children" (`Float32`)
         @test isempty(JET.get_reports(JET.report_opt(flatten!,
             (typeof(v64), typeof(ps64), typeof(l64));
             target_modules = (NeuralNetworkParameters,))))
@@ -66,7 +66,9 @@ if JET_WORKS
 
         # `flatten.jl` "wrapping in a NetworkParameters costs nothing extra" (`Float64`),
         # "unflatten is generic in the element type" (`Float32`, `Int`); `derivatives.jl`
-        # "unflatten carries Duals"
+        # "unflatten carries Duals" (a `Dual` of `Float64`) and "a gradient from the `flatten`
+        # rule is not converted again ($T)" at `Float32` (a `Dual` of `Float32`, under
+        # `ForwardDiff.gradient`)
         wrapped = NetworkParameters((a = [1.0, 2.0], b = [3.0]))
         w, lw = flatten(wrapped)
         _, la = flatten(NetworkParameters((a = [1.0, 2.0],)))
@@ -74,6 +76,10 @@ if JET_WORKS
             L2 = (W = [0.7 0.8], b = [0.9])))
         vr, lr = flatten(psr)
         dual = ForwardDiff.Dual.(vr, 1.0)
+        vs32, ls32 = flatten(NetworkParameters((L1 = (S = Sym(Float32[1, 2, 3], 2),),)))
+        vs64, ls64 = flatten(NetworkParameters((L1 = (S = Sym([1.0, 2.0, 3.0], 2),),)))
+        dual32 = ForwardDiff.Dual.(vs32, 1.0f0)  # a `Dual` of `Float32`
+        dual64 = ForwardDiff.Dual.(vs64, 1.0)
         @test isempty(JET.get_reports(JET.report_opt(unflatten, (typeof(lw), typeof(w));
             target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(
@@ -83,8 +89,12 @@ if JET_WORKS
             target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(unflatten, (typeof(lr), typeof(dual));
             target_modules = (NeuralNetworkParameters,))))
+        @test isempty(JET.get_reports(JET.report_opt(
+            unflatten, (typeof(ls32), typeof(dual32));
+            target_modules = (NeuralNetworkParameters,))))
 
-        # the walks: `wide_branches.jl` "the walks that take two sets do not allocate" (`Float32`);
+        # the walks: `wide_branches.jl` "the walks that take two sets do not allocate at $k
+        # children" (`Float32`);
         # `walk.jl` "the in-place walks pair children by key, not by position", "in-place walks",
         # "a zipped fold pairs the leaves" and "foldstorage folds the storage and not the leaf"
         # (`Float64`)
@@ -124,14 +134,16 @@ if JET_WORKS
             (typeof(fold2), Float64, typeof(ps64), typeof(ps64));
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` "the element type of a branch costs nothing" (`Float32`); `leaves.jl`
-        # "parameter_eltype" (`Float64`) and "parameter_eltype is total where freeparameters is
-        # not" (`Union{}`); `derivatives.jl` "unflatten carries Duals"
+        # `wide_branches.jl` "the element type of a branch of $k children costs nothing"
+        # (`Float32`); `leaves.jl` "parameter_eltype" (`Float64`, the mixed branch that promotes
+        # to it) and "parameter_eltype is total where freeparameters is not" (`Union{}`);
+        # `derivatives.jl` "unflatten carries Duals"
         a1 = NetworkParameters((a = [1.0],))
+        mixed = (a = Float32[1], b = [2.0])
         psd = unflatten(lr, dual)
         @test isempty(JET.get_reports(JET.report_opt(parameter_eltype, (typeof(ps32),);
             target_modules = (NeuralNetworkParameters,))))
-        @test isempty(JET.get_reports(JET.report_opt(parameter_eltype, (typeof(a1),);
+        @test isempty(JET.get_reports(JET.report_opt(parameter_eltype, (typeof(mixed),);
             target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(parameter_eltype, (typeof(psd),);
             target_modules = (NeuralNetworkParameters,))))
@@ -150,7 +162,15 @@ if JET_WORKS
             target_modules = (NeuralNetworkParameters,))))
 
         # `wide_branches.jl` (`Float32`); `flatten.jl` "round trip" (`Float64`) and "the empty set
-        # flattens to an empty vector" (`Union{}`)
+        # flattens to an empty vector" (`Union{}`); `derivatives.jl` "a gradient from the
+        # `flatten` rule is not converted again ($T)", whose `f` flattens a set of `Dual`s of `T`
+        # under `ForwardDiff.gradient`
+        psd32 = unflatten(ls32, dual32)
+        psd64 = unflatten(ls64, dual64)
+        @test isempty(JET.get_reports(JET.report_opt(flatten, (typeof(psd32),);
+            target_modules = (NeuralNetworkParameters,))))
+        @test isempty(JET.get_reports(JET.report_opt(flatten, (typeof(psd64),);
+            target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(flatten, (typeof(ps32),);
             target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(flatten, (typeof(ps64),);
@@ -186,7 +206,7 @@ if JET_WORKS
 
         # the pullback of the `unflatten` rule: `derivatives.jl` "the pullback does not pay for the
         # depth of the tree" (`Float64`); `wide_branches.jl` "the pullback of unflatten reaches a
-        # branch" (`Float32`)
+        # branch of $k children" (`Float32`)
         L = [1.0, 2.0]
         flat = NetworkParameters((a = L, b = L, c = L, d = L))
         wf, lf = flatten(flat)
