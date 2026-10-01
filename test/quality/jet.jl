@@ -11,6 +11,8 @@
 # named on the line above it. Another container at the same element type gets no line, and neither
 # does an element type that reaches the entry point only through another function. A set with no
 # numeric leaf has the element type `Union{}`, and gets a line where a test passes one directly.
+# A `Dual` line uses the tag `Nothing`, because the tag of a test's `ForwardDiff.gradient` holds a
+# closure of that test file.
 
 using NeuralNetworkParameters
 using ChainRulesCore
