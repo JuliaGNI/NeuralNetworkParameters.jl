@@ -21,6 +21,20 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `1:length`, over the same indices. Two `invalid-docstring-code` findings for the `...`
   placeholder in the `NetworkParameters` docstring are suppressed. A test for the empty set is
   added to `test/flatten.jl`.
+- **`test/quality/jet.jl` runs JET's `report_opt` on the hot paths**, in `core` directly after
+  Aqua. Its entry points are the functions that a test asserts with `@allocated`: `flatten!`,
+  `unflatten!`, `unflatten`, `foreachparameters`, `mapparameters!`, `mapstorage!`,
+  `foldparameters`, `foldstorage`, `parameter_eltype`, the `NetworkParameters` constructor,
+  `flatten(ps)`, `flatten(T, ps)`, the `rrule` of each `flatten` method, and the pullback of the
+  `unflatten` rule. Each has one line per element type that the tests pass to it directly
+  (`Float32`, `Float64`, and for some an `Int`, a `ForwardDiff.Dual` or the `Union{}` of a set
+  with no numeric leaf); all 37 lines report nothing. Where JET does not work, the file records
+  one `@test_skip`. JET is a new test dependency, with no `[compat]` bound.
+- **`test/Project.toml` and `docs/Project.toml` no longer bound a dependency of the package.** The
+  `[compat]` entries for `ChainRulesCore`, `GeometricBase`, `HDF5` and `ZygoteRules` leave
+  `test/Project.toml`, and the one for `HDF5` leaves `docs/Project.toml`. Both environments
+  contain the package, so its own bounds apply there. The `HDF5 = "0.17.4"` of the docs was
+  narrower than the package's `"0.17"`.
 
 ## [0.4.1] — 2026-09-24
 
