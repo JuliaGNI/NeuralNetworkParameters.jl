@@ -35,6 +35,9 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `test/Project.toml`, and the one for `HDF5` leaves `docs/Project.toml`. Both environments
   contain the package, so its own bounds apply there. The `HDF5 = "0.17.4"` of the docs was
   narrower than the package's `"0.17"`.
+- **The `[compat]` floor is raised to `GeometricBase = "0.15.0"`**, because GeometricBase 0.15
+  declares its stubs public and requires Julia 1.11. The `julia = "1.11"` floor is unchanged.
+  GeometricBase 0.14 users keep 0.4.1.
 
 ## [0.4.1] — 2026-09-24
 
