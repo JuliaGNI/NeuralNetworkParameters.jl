@@ -17,7 +17,7 @@ ZygoteRulesExt = "ZygoteRules"
 
 [compat]
 ChainRulesCore = "1"
-GeometricBase = "0.14.9"
+GeometricBase = "0.14.9, 0.15"
 HDF5 = "0.17"
 ZygoteRules = "0.2.7"
 julia = "1.11"
