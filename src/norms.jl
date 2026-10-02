@@ -13,9 +13,7 @@ stopping criterion computed from it.
 This method is here rather than in `GeometricBase` because **what it has to get right is this
 package's, not that one's**: it walks the leaf protocol with [`foldparameters`](@ref) and it dispatches
 on [`NetworkParameters`](@ref). A change to either breaks it, and this is the package where such a
-change is made and tested. `GeometricBase` supports Julia 1.10 while this package requires 1.11, so a
-test environment there could not resolve this package at all — a method a package cannot exercise is a
-method it cannot keep correct.
+change is made and tested.
 
 Ownership does not decide the question, because it admits both: a method is type piracy only when the
 function *and* every dispatched argument type belong elsewhere, and `NetworkParameters` is this

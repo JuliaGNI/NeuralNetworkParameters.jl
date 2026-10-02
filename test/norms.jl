@@ -2,8 +2,7 @@
 #
 # This file exists because it *can*: the method dispatches on this package's type and walks this
 # package's leaf protocol, so this is the package that breaks it and therefore the package that has to
-# catch it. `GeometricBase` supports Julia 1.10 and cannot resolve this package at all, so a method
-# living there is one nobody can exercise.
+# catch it.
 
 using GeometricBase
 using GeometricBase.Utils: L2norm, l2norm
