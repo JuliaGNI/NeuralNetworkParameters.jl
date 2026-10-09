@@ -35,7 +35,7 @@ where its storage is:
 NeuralNetworkParameters.parameter_eltype(x::MyLeaf) = parameter_eltype(freeparameters(x))
 ```
 
-Without it the leaf contributes nothing to the promoted element type, and [`flatten`](@ref) says so
+Without it the leaf contributes no element type, and [`flatten`](@ref) says so
 rather than guessing one.
 
 `GeometricOptimizers` already exposes exactly this relation as `Base.parent` for its manifolds,
@@ -104,16 +104,15 @@ the dense interface; the parameter gradient is ``\partial L/\partial S``, which 
 off-diagonal entry twice: ``G_{ij} + G_{ji}``. The two differ by a factor of two off the diagonal, so
 a type whose storage is not its interface defines a method that converts one to the other.
 
-This package calls it exactly once per leaf, on the accumulated cotangent, at the two places where an
-AD cotangent becomes a parameter gradient: the gradient that the `ZygoteRules` extension returns for a
-[`NetworkParameters`](@ref), and the flat gradient that the reverse rule of [`unflatten`](@ref)
-returns. It dispatches on the primal `leaf`, because the type of `Δ` depends on how the loss used the
+This package calls it exactly once per top-level leaf of a set, on the accumulated cotangent, through
+[`map_cotangent`](@ref), at the two places where an AD cotangent becomes a parameter gradient: the
+gradient that the `ZygoteRules` extension returns for a [`NetworkParameters`](@ref), and the flat
+gradient that the reverse rule of [`unflatten`](@ref) returns. The flat gradient is the structured one,
+flattened. It dispatches on the primal `leaf`, because the type of `Δ` depends on how the loss used the
 leaf: a leaf used twice gets a dense `Matrix`, whatever its own type is. It is never called with a
-structural zero (`nothing` or a `ChainRulesCore.AbstractZero`), and the flat path calls it only for a
-leaf whose [`freeparameters`](@ref) are not the leaf itself: the entries of a terminal leaf are its
-storage, so its cotangent is its storage gradient already. For the same reason it is not called for
-a leaf whose cotangent is part of a `NetworkParameters`, which is what the reverse rule of
-[`flatten`](@ref) returns: its leaves hold the storage gradient already.
+structural zero (`nothing` or a `ChainRulesCore.AbstractZero`): an untouched leaf gets a zero leaf of
+its type instead. It is not called for a leaf whose cotangent is part of a `NetworkParameters`, which is
+what the reverse rule of [`flatten`](@ref) returns: its leaves hold the storage gradient already.
 
 The extension converts the gradient of `Zygote.pullback(f, ps)` and `Zygote.gradient(f, ps)` for a
 `Function` `f` and a set `ps` that is the only argument, which is how a loss is differentiated with
@@ -121,10 +120,13 @@ respect to a set. Zygote's own methods answer every other call: a further argume
 struct for `f`, or a set held inside another argument. Those return the structural tangent
 `(params = …,)` with the natural cotangent at each leaf, and do not call this function.
 
-A method converts an *array* cotangent only. A structural tangent over the leaf's fields, a
+A method converts an *array* cotangent only, and returns a leaf of the same type, whose storage the
+flat path reads with [`freeparameters`](@ref). A structural tangent over the leaf's fields, a
 `NamedTuple` or a `ChainRulesCore.Tangent`, comes from a loss that read the storage field directly
-and holds ``\partial L/\partial S`` already, so the default passes it through. The return value is
-read with [`freeparameters`](@ref) on the flat path, so a method returns a leaf of the same type.
+and holds ``\partial L/\partial S`` already. The default method for it rebuilds the leaf with
+[`rebuild`](@ref) around the components of the tangent that belong to its storage — matched by key
+for a `NamedTuple` of blocks, by position for a `Tuple` of blocks, and by field for one block — each
+converted by this function in turn, with a zero block where the tangent has none.
 
 # Extending
 
@@ -180,7 +182,8 @@ isterminal(x) = freeparameters(x) === x
 """
     parameter_eltype(ps)
 
-The element type to flatten `ps` into: `promote_type` over the element types of its leaves.
+The element type to flatten `ps` into: the element type of its leaves, which is one type. Leaves of
+two numeric element types raise an `ArgumentError` that names both; nothing is promoted.
 
 `Float32` parameters therefore flatten to a `Vector{Float32}`. Defaulting to `Float64` instead — as
 `ParameterHandling.flatten` does — silently doubles the width of every single-precision network that
@@ -198,27 +201,15 @@ parameter_eltype((a = Float32[1, 2], b = Float32[3;;]))
 Float32
 ```
 
-A mixed parameter set promotes:
-
-```jldoctest
-using NeuralNetworkParameters: parameter_eltype
-
-parameter_eltype((a = Float32[1, 2], b = [3.0]))
-
-# output
-
-Float64
-```
-
 # Implementation
 
-This function is total, where [`freeparameters`](@ref) is not: every [`NetworkParameters`](@ref) runs
-its constructor through here, including sets that hold no numbers at all — a gradient tree with
-`nothing` where an untouched layer's entries would be, or `SymbolicNeuralNetworks` wrapping generated
-functions in one. A leaf this package cannot read numbers out of contributes nothing to the promotion,
-exactly as an empty set does, and both report `Union{}`. A set that cannot be flattened is still a set
-with an element type; the protocol error comes from [`parameterlayout`](@ref), which decides something
-with it.
+This function raises only for two element types, where [`freeparameters`](@ref) raises for a leaf
+without the protocol: every [`NetworkParameters`](@ref) runs its constructor through here, including
+sets that hold no numbers at all — a tree with `nothing` in place of a leaf, or
+`SymbolicNeuralNetworks` wrapping generated functions in one. A leaf this package cannot read numbers
+out of contributes no element type, exactly as an empty set does, and both report `Union{}`. A set
+that cannot be flattened is still a set with an element type; the protocol error comes from
+[`parameterlayout`](@ref), which decides something with it.
 
 The recursion follows [`freeparameters`](@ref) for an `AbstractArray` leaf — every structured
 parameter type in the ecosystem — and a leaf that keeps its numbers behind another interface opts in
@@ -229,7 +220,7 @@ It follows it at the level of *values*, `freeparameters(x) === x`, and that is a
 an implementation detail. A structured leaf reports the element type of its **storage**, which need not
 be the `eltype` of the interface it presents: a leaf that is an `AbstractMatrix{Float64}` over a
 `Vector{Float32}` flattens into a `Vector{Float32}`, because that is what its numbers are. Deciding
-the promotion from the leaf's *type* instead would read the interface and be wrong about such a leaf,
+the element type from the leaf's *type* instead would read the interface and be wrong about such a leaf,
 which is why it is not decided there — and there is no cost to buy with it.
 
 For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
@@ -247,8 +238,8 @@ exactly what `flatten(T, ps)` costs.
     s === x ? eltype(x) : parameter_eltype(s)
 end
 
-# A leaf this package cannot read numbers out of contributes nothing to the promotion, exactly as an
-# empty set does: a gap in a gradient tree — `nothing`, or a `ChainRules` structural zero — or a
+# A leaf this package cannot read numbers out of contributes no element type, exactly as an empty set
+# does: `nothing` or a `ChainRules` structural zero in place of a leaf, or a
 # generated function that `SymbolicNeuralNetworks` keeps in a parameter set. `freeparameters` raises
 # for all of these and this function must not, since every `NetworkParameters` runs its constructor
 # through it. A leaf that *does* keep numbers behind a non-array interface opts in with
@@ -261,15 +252,28 @@ end
 #
 # It takes the *branch* and not its `values`, which is the other half of that treatment. `values` of a
 # branch materialises a temporary tuple, which is free while the branch stays in registers and is not
-# beyond that: `Base` unrolls a tuple up to 32 fields and drops to its `Any32` fallback past it, so a
-# promotion taken over `values` costs nothing at 32 children and 6 144 bytes at 369, and 23 840 on a
-# 369 × 2 branch of branches. `getfield` at a literal index reads a `NamedTuple` and a `Tuple` alike,
-# as `_flatten_children!` does for the same reason.
+# beyond that: `Base` unrolls a tuple up to 32 fields and drops to its `Any32` fallback past it.
+# `getfield` at a literal index reads a `NamedTuple` and a `Tuple` alike, as `_flatten_children!` does
+# for the same reason.
 @generated function _promote_eltypes(xs::Union{NamedTuple, Tuple})
     fieldcount(xs) == 0 && return :(Union{})
     expr = :(parameter_eltype(getfield(xs, 1)))
     for i in 2:fieldcount(xs)
-        expr = :(promote_type($expr, parameter_eltype(getfield(xs, $i))))
+        expr = :(_join_eltype($expr, parameter_eltype(getfield(xs, $i))))
     end
     expr
+end
+
+# A set has one element type. `Union{}`, from a leaf with no numbers, joins any type; two numeric
+# types that differ are an error, and nothing is promoted.
+@inline function _join_eltype(S::Type, T::Type)
+    S === Union{} && return T
+    (T === Union{} || T === S) && return S
+    _mixed_eltype_error(S, T)
+end
+
+@noinline function _mixed_eltype_error(S, T)
+    throw(ArgumentError(string(
+        "the leaves of a parameter set have one element type, and these have two: ", S, " and ",
+        T, ". Convert the leaves to one of them before building the set.")))
 end

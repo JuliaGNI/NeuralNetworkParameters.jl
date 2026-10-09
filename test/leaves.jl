@@ -52,7 +52,9 @@ end
 @testset "parameter_eltype" begin
     @test parameter_eltype(NetworkParameters((a = Float32[1, 2],))) === Float32
     @test parameter_eltype(NetworkParameters((a = [1.0],))) === Float64
-    @test parameter_eltype((a = Float32[1], b = [2.0])) === Float64
+    @test parameter_eltype((a = Float32[1], b = Float32[2])) === Float32
+    # one element type, and no promotion
+    @test_throws ArgumentError parameter_eltype((a = Float32[1], b = [2.0]))
     @test parameter_eltype(sample_sym()) === Float64
     @test parameter_eltype(sample_twoblock()) === Float64
     @test parameter_eltype(Float32[1, 2]) === Float32
@@ -99,7 +101,7 @@ end
 NNP.freeparameters(b::Blocks) = b.data
 NNP.rebuild(::Blocks, data) = Blocks(data)
 
-@testset "a leaf that is not an array contributes nothing to the promotion" begin
+@testset "a leaf that is not an array contributes no element type" begin
     ps = NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),))
     @test parameter_eltype(ps) === Union{}
     @test ps isa NetworkParameters{Union{}}
@@ -132,7 +134,7 @@ end
 # A leaf whose storage has a *different* element type from the interface it presents: an
 # `AbstractMatrix{Float64}` over a `Vector{Float32}`. Contrived — every structured type in the
 # ecosystem stores what it presents — and pinned all the same, because it is the case that separates
-# following `freeparameters` from reading the leaf's type. Deciding the promotion in
+# following `freeparameters` from reading the leaf's type. Deciding the element type in
 # `_promote_eltypes`' generator by settling an `AbstractArray` child with `eltype`, as issue #22
 # proposes, reports `Float64` here and flattens these three numbers into a vector twice as wide.
 struct Widened{T} <: AbstractMatrix{T}
@@ -145,7 +147,7 @@ Base.getindex(A::Widened{T}, i::Int, j::Int) where {T} = T(A.S[max(i, j)])
 NNP.freeparameters(A::Widened) = A.S
 NNP.rebuild(::Widened{T}, data) where {T} = Widened{T}(data)
 
-@testset "the promotion follows the storage, not the interface" begin
+@testset "the element type follows the storage, not the interface" begin
     A = Widened{Float64}(Float32[1, 2, 3])
     @test eltype(A) === Float64
     @test parameter_eltype(A) === Float32

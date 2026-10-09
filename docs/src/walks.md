@@ -65,9 +65,10 @@ mapparameters(+, a, b).L.x
 
 ## Gaps
 
-A branch or leaf that is `nothing` skips that position in the in-place and `foreach` walks. This is the
-shape a gradient tree has when a layer was frozen or simply not differentiated, and skipping means such
-a tree can be walked against the parameters it belongs to without filling the holes in first:
+A branch or leaf that is `nothing` skips that position in the in-place and `foreach` walks. A tree with
+no entry for some layers — the updates of a network with a frozen layer — can then be walked against
+the parameters it belongs to without filling the holes in first. A gradient from this package has no
+holes: an untouched leaf gets a zero leaf.
 
 ```jldoctest walks
 dest = NetworkParameters((p = [1.0], q = [2.0]))

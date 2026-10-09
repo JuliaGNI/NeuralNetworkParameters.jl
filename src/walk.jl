@@ -29,7 +29,7 @@
 # the same straight-line code the chain used to inline down to. They are `_foreach_zip`, `_fold_zip`
 # and `_anynothing` here, `_flatten_children!`, `_unflatten_children` and `_unflatten_children!` in
 # `flatten.jl`, the two branch cases of `_layout` in `layout.jl`, `_promote_eltypes` in `leaves.jl`,
-# and `_accumulate_named!`, `_matching_named` and `_map_cotangent_named` on the reverse pass in
+# and `_matching_named` and `_map_cotangent_named` on the reverse pass in
 # `derivatives.jl`.
 #
 # A walk that takes *several* sets in lockstep indexes each of them in place too, and that is the same
@@ -161,8 +161,8 @@ are the same set in a different order is an `ArgumentError` and not a silent cro
 branch is paired positionally, since the blocks of a multi-block leaf have no keys to agree on.
 
 A branch or leaf of `rest` that is `nothing` **skips** that position entirely — `f` is not called
-there. This is what lets a gradient tree that is missing the entries of a frozen or non-trainable
-layer be walked against the parameters it belongs to, without having to fill the holes in first.
+there. This is what lets a tree that is missing the entries of a frozen or non-trainable layer be
+walked against the parameters it belongs to, without having to fill the holes in first.
 
 Allocation-free, at any width of branch, any depth of nesting and any number of `rest`: the branches are
 indexed in place rather than taken apart, so nothing is materialised on the way in.

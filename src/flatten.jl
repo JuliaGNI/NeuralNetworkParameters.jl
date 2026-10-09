@@ -59,14 +59,14 @@ function flatten(::Type{T}, ps) where {T}
     v, layout
 end
 
-# `parameter_eltype` reports `Union{}` for a set with nothing to promote, and an empty set flattens to
+# `parameter_eltype` reports `Union{}` for a set with no numeric leaf, and an empty set flattens to
 # a `Vector{Union{}}` quite legitimately. If the layout did find numbers, though, the set holds a leaf
-# whose storage the promotion never reached — one that keeps it behind a non-array interface and has
-# no `parameter_eltype` of its own. A `Vector{Union{}}` would fail on the first `copyto!` instead of
-# naming the missing method.
+# whose storage `parameter_eltype` never reached — one that keeps it behind a non-array interface and
+# has no `parameter_eltype` of its own. A `Vector{Union{}}` would fail on the first `copyto!` instead
+# of naming the missing method.
 @noinline function _no_element_type_error()
     throw(ArgumentError(string(
-        "the leaves of these parameters promote to `Union{}`, so there is no element type to ",
+        "the leaves of these parameters have the element type `Union{}`, so there is no element type to ",
         "flatten into — yet the layout found numbers to copy.\n",
         "A leaf that keeps its numbers behind an interface that is not an array's has to say what ",
         "they are:\n",

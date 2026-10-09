@@ -4,7 +4,7 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — targeting 0.5.0
 
 ### Changed
 
@@ -19,6 +19,37 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   under `src/`, and the test convention keeps a test file at the top level of `test/` only where it
   mirrors `src/<name>.jl`. Their labels and group are unchanged. No source file changes beyond the
   path in two comments.
+
+### Breaking Changes
+
+- **A leaf or branch the loss did not touch has a zero gradient, not a hole.** The gradient that the
+  `ZygoteRules` extension returns, `map_cotangent`'s result and `ProjectTo(::NetworkParameters)` all
+  give `mapstorage(zero, leaf)` for each such leaf or branch, so every gradient flattens. Only a whole
+  set that no rule touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing` in a
+  source set.
+- **Every numeric leaf of a `NetworkParameters` has one element type.** Leaves of two element types
+  raise an `ArgumentError` at construction that names both, e.g. `NetworkParameters((a = Float32[1], b = [1.0]))`.
+  `parameter_eltype` no longer promotes, and a leaf with no numbers still contributes `Union{}`.
+  `flatten(T, ps)` still converts to a named element type. A mixed-precision set that constructed on
+  0.4.x now raises.
+- **`+` of two `NetworkParameters` is `mapstorage(+, a, b)`**, so a `nothing` leaf is no longer a zero.
+
+### Fixed
+
+- **The flat gradient through `unflatten` of a structured leaf is no longer doubled.** For a leaf whose
+  storage holds a structured block, such as the `SkewSymMatrix` `A` of GeometricOptimizers'
+  `StiefelLieAlgHorMatrix`, `storage_gradient` converted the cotangent twice, once for the leaf and once
+  for the block. On 0.4.2 the `A` entry was -0.5647 where the central difference gives -0.2823. The
+  reverse rule now converts the cotangent with `map_cotangent(storage_gradient, ps, Δ)` and flattens the
+  result, so the flat gradient is the structured gradient flattened. The probe is
+  `scripts/structured_leaf_gradients.jl`, which needs GeometricOptimizers in its environment. The reverse
+  rule also has no cotangent walk of its own now, so a Float32 gradient of the NNP-design benchmark
+  allocates slightly less (model A: 4 658 928 to 4 654 320 bytes).
+- **A loss that reads the storage field of a structured leaf (`p.L.X.S`) gives a gradient that flattens.**
+  `storage_gradient` of a `NamedTuple` or `ChainRulesCore.Tangent` cotangent rebuilds the leaf around its
+  storage blocks, matched by key, position or field, and converts each block. Before, `flatten` of such a
+  gradient raised `no method of freeparameters for Nothing` for `SymmetricMatrix`, `SkewSymMatrix` and
+  lift leaves.
 
 ## [0.4.2] — 2026-10-02
 

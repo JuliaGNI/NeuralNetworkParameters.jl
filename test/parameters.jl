@@ -74,13 +74,22 @@ end
     @test ps isa NetworkParameters{Float64}
     @test NetworkParameters((a = Float32[1, 2],)) isa NetworkParameters{Float32}
 
-    # a promotion, not a uniformity guarantee: unlike a `Vararg` bound on the values,
-    # `NetworkParameters{T}` does not license assuming every leaf is a `T`
-    mixed = NetworkParameters((a = Float32[1], b = [2.0]))
-    @test mixed isa NetworkParameters{Float64}
-    @test eltype(mixed.a) === Float32
+    # one element type: a numeric leaf of another is an error that names both types, in either order
+    # and at any depth
+    for mixed in ((a = Float32[1], b = [1.0]), (a = [1.0], b = Float32[1]),
+        (L1 = (W = Float32[1;;],), L2 = (W = [1.0;;],)),
+        (i = NetworkParameters((a = Float32[1],)), b = [2.0]))
+        err = try
+            NetworkParameters(mixed)
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("Float32", err.msg)
+        @test occursin("Float64", err.msg)
+    end
 
-    # nothing to promote. `SymbolicNeuralNetworks` builds empty sets, so this is exercised
+    # no numeric leaf. `SymbolicNeuralNetworks` builds empty sets, so this is exercised
     @test NetworkParameters(NamedTuple()) isa NetworkParameters{Union{}}
     # a gap where an untouched layer's entries would be, as `docs/src/walks.md` shows
     @test NetworkParameters((p = [10.0], q = nothing)) isa NetworkParameters{Float64}
@@ -90,9 +99,9 @@ end
     @test NetworkParameters((f = sin,)) isa NetworkParameters{Union{}}
     @test NetworkParameters((f = sin, a = [1.0])) isa NetworkParameters{Float64}
 
-    # a nested set promotes through, reading the inner element type off its type
-    @test NetworkParameters((i = NetworkParameters((a = Float32[1],)), b = [2.0])) isa
-          NetworkParameters{Float64}
+    # a nested set reads its element type off its type
+    @test NetworkParameters((i = NetworkParameters((a = Float32[1],)), b = Float32[2])) isa
+          NetworkParameters{Float32}
 
     # the element type takes no part in equality, which compares the wrapped `NamedTuple`s
     @test NetworkParameters((a = Float32[1],)) == NetworkParameters((a = [1.0],))
@@ -148,12 +157,11 @@ end
     @test !(1.0 isa NetworkParameters)
     @test !(([1.0], [2.0]) isa NetworkParameters)
 
-    # no bound on the element type and none on the depth: a mixed-precision, unevenly nested set is
-    # one, with `T` the promotion over its leaves. A `Vararg` bound on the values would make this set
-    # no `T`'s at all.
-    mixed = NetworkParameters((a = Float32[1.0], b = (c = Float64[2.0], d = (e = [3],))))
-    @test mixed isa NetworkParameters
-    @test parameter_eltype(mixed) === Float64
+    # no bound on the depth: an unevenly nested set is one, with `T` the element type of its leaves
+    uneven = NetworkParameters((
+        a = Float32[1.0], b = (c = Float32[2.0], d = (e = Float32[3],))))
+    @test uneven isa NetworkParameters
+    @test parameter_eltype(uneven) === Float32
 end
 
 # `isparametertree` is the *other* question: what the walks recurse into. It admits a `Tuple`, which a
