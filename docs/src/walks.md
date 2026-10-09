@@ -68,7 +68,7 @@ mapparameters(+, a, b).L.x
 A branch or leaf that is `nothing` skips that position in the in-place and `foreach` walks. A tree with
 no entry for some layers — the updates of a network with a frozen layer — can then be walked against
 the parameters it belongs to without filling the holes in first. A gradient from this package has no
-holes: an untouched leaf gets a zero leaf.
+holes: an untouched leaf gets a zero leaf, and a leaf with no numbers stays `nothing`.
 
 ```jldoctest walks
 dest = NetworkParameters((p = [1.0], q = [2.0]))

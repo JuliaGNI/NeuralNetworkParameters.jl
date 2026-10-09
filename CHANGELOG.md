@@ -24,9 +24,14 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 - **A leaf or branch the loss did not touch has a zero gradient, not a hole.** The gradient that the
   `ZygoteRules` extension returns, `map_cotangent`'s result and `ProjectTo(::NetworkParameters)` all
-  give `mapstorage(zero, leaf)` for each such leaf or branch, so every gradient flattens. Only a whole
-  set that no rule touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing` in a
-  source set.
+  give `mapstorage(zero, leaf)` for each such leaf or branch, so every gradient flattens. A leaf with
+  no numbers (`nothing`, a function), whose `parameter_eltype` is `Union{}`, stays `nothing`. Only a
+  whole set that no rule touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing`
+  in a source set.
+- **The gradient of a leaf has the leaf's element type**, whatever the precision of its cotangent. The
+  default `storage_gradient` converts an array or a number cotangent to `parameter_eltype(leaf)`, so a
+  `Float32` set whose loss multiplies a leaf by a `Float64` constant has a `Float32` gradient, flat and
+  structured. A `storage_gradient` method of a consumer returns its leaf's element type too.
 - **Every numeric leaf of a `NetworkParameters` has one element type.** Leaves of two element types
   raise an `ArgumentError` at construction that names both, e.g. `NetworkParameters((a = Float32[1], b = [1.0]))`.
   `parameter_eltype` no longer promotes, and a leaf with no numbers still contributes `Union{}`.
@@ -43,11 +48,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   reverse rule now converts the cotangent with `map_cotangent(storage_gradient, ps, Δ)` and flattens the
   result, so the flat gradient is the structured gradient flattened. The probe is
   `scripts/structured_leaf_gradients.jl`, which needs GeometricOptimizers in its environment. The reverse
-  rule also has no cotangent walk of its own now, so a Float32 gradient of the NNP-design benchmark
-  allocates slightly less (model A: 4 658 928 to 4 654 320 bytes).
+  rule also has no cotangent walk of its own now, so a Float32 flat gradient of the NNP-design benchmark
+  allocates slightly less (model A, `bench_grad.jl`, Julia 1.13.1, registered 0.4.2, whose `src/` the base
+  of this release keeps: 4 658 928 to 4 654 320 bytes).
 - **A loss that reads the storage field of a structured leaf (`p.L.X.S`) gives a gradient that flattens.**
   `storage_gradient` of a `NamedTuple` or `ChainRulesCore.Tangent` cotangent rebuilds the leaf around its
-  storage blocks, matched by key, position or field, and converts each block. Before, `flatten` of such a
+  storage blocks, matched by key or by field, and converts each block. Before, `flatten` of such a
   gradient raised `no method of freeparameters for Nothing` for `SymmetricMatrix`, `SkewSymMatrix` and
   lift leaves.
 

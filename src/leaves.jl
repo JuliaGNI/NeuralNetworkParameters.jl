@@ -121,12 +121,19 @@ struct for `f`, or a set held inside another argument. Those return the structur
 `(params = …,)` with the natural cotangent at each leaf, and do not call this function.
 
 A method converts an *array* cotangent only, and returns a leaf of the same type, whose storage the
-flat path reads with [`freeparameters`](@ref). A structural tangent over the leaf's fields, a
-`NamedTuple` or a `ChainRulesCore.Tangent`, comes from a loss that read the storage field directly
-and holds ``\partial L/\partial S`` already. The default method for it rebuilds the leaf with
-[`rebuild`](@ref) around the components of the tangent that belong to its storage — matched by key
-for a `NamedTuple` of blocks, by position for a `Tuple` of blocks, and by field for one block — each
-converted by this function in turn, with a zero block where the tangent has none.
+flat path reads with [`freeparameters`](@ref). Its element type is the leaf's,
+[`parameter_eltype`](@ref)`(leaf)`, whatever the precision of the cotangent: a loss that multiplies a
+`Float32` leaf by a `Float64` constant gives that leaf a `Float64` cotangent. The default method
+converts an array or a number cotangent to that element type, with no copy where the types match. A
+method that returns another element type makes the gradient set raise the `ArgumentError` of
+[`NetworkParameters`](@ref) for two element types.
+
+A structural tangent over the leaf's fields, a `NamedTuple` or a `ChainRulesCore.Tangent`, comes from
+a loss that read the storage field directly and holds ``\partial L/\partial S`` already. The default
+method for it rebuilds the leaf with [`rebuild`](@ref) around the components of the tangent that
+belong to its storage — matched by key for a `NamedTuple` of blocks, and by the field each block is
+for a `Tuple` of blocks and for one block — each converted by this function in turn, with a zero
+block where the tangent has none.
 
 # Extending
 
@@ -137,7 +144,14 @@ function NeuralNetworkParameters.storage_gradient(A::SymmetricMatrix, G::Abstrac
 end
 ```
 """
-storage_gradient(leaf, Δ) = Δ
+storage_gradient(leaf, Δ) = _in_eltype(parameter_eltype(leaf), Δ)
+
+# A leaf with no numbers has no element type to convert to.
+function _in_eltype(::Type{T}, Δ::AbstractArray) where {T}
+    T === Union{} ? Δ : convert(AbstractArray{T}, Δ)
+end
+_in_eltype(::Type{T}, Δ::Number) where {T} = T === Union{} ? Δ : convert(T, Δ)
+_in_eltype(_, Δ) = Δ
 
 """
     parameter_metadata(x)

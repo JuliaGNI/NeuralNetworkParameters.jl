@@ -105,14 +105,13 @@ function storage_gradient(leaf, Δ::Union{NamedTuple, ChainRulesCore.Tangent})
     rebuild(leaf, _map_child(storage_gradient, s, _storage_cotangent(leaf, s, _cotangent_backing(Δ))))
 end
 
-# Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by
-# position, for a `Tuple` of blocks, which are the leaf's first fields in order. A tangent that stops
-# short leaves the remaining blocks as structural zeros.
+# Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by the
+# field each block is, for a `Tuple` of blocks. A block the tangent leaves out is a structural zero.
 function _storage_cotangent(_, storage::NamedTuple, nt::NamedTuple)
     NamedTuple{keys(storage)}(_matching_named(storage, nt))
 end
-function _storage_cotangent(_, storage::Tuple, nt::NamedTuple)
-    _matching_positional(storage, values(nt))
+function _storage_cotangent(leaf, storage::Tuple, nt::NamedTuple)
+    map(block -> _storage_component(leaf, block, nt), storage)
 end
 
 # Storage in one block is one of the leaf's fields, `(S = …, n = …)` for a leaf whose storage is its `S`.
@@ -140,15 +139,6 @@ end
     :(($((:(_cotangent_get(nt, $(QuoteNode(k)))) for k in Keys)...),))
 end
 
-@inline _cotangent_head(::Tuple{}) = nothing
-@inline _cotangent_tail(::Tuple{}) = ()
-@inline _cotangent_head(Δ::Tuple) = first(Δ)
-@inline _cotangent_tail(Δ::Tuple) = Base.tail(Δ)
-
-@inline _matching_positional(::Tuple{}, _) = ()
-@inline _matching_positional(storage::Tuple, Δ) = (
-    _cotangent_head(Δ), _matching_positional(Base.tail(storage), _cotangent_tail(Δ))...)
-
 # ---------------------------------------------------------------------------------------------------
 # A cotangent tree, leaf by leaf against the parameters
 #
@@ -167,8 +157,9 @@ keys for a `NamedTuple`, positional for a `Tuple`, and a `NetworkParameters` for
 
 A hole is `nothing`, any flavour of zero, or a `Tangent` with no fields. Where `Δ` as a whole is a
 hole, the result is `nothing`. A hole inside `Δ`, at a leaf or a whole branch, comes back as a zero
-leaf of each leaf's own type, `mapstorage(zero, leaf)`, and `f` never sees it. So the result is
-complete wherever `Δ` touched the set at all.
+leaf of each leaf's own type, `mapstorage(zero, leaf)`, and `f` never sees it. A leaf with no numbers,
+whose [`parameter_eltype`](@ref) is `Union{}` — `nothing`, or a function — has no zero and stays
+`nothing`. So the result is complete wherever `Δ` touched the set at all.
 
 `Δ` is the cotangent of `ps` itself, in the shape Zygote gives it, and a cotangent of another shape
 raises an `ArgumentError` at the first branch it does not fit. At a `NamedTuple` branch the cotangent
@@ -204,8 +195,11 @@ end
 # A child of a branch: a hole there is a zero leaf, or a branch of zero leaves.
 function _map_child(f::F, x, Δ) where {F}
     Δ = _normalized_for(x, Δ)
-    Δ === nothing ? mapstorage(zero, x) : _map_cotangent(f, x, Δ)
+    Δ === nothing ? mapparameters(_zero_leaf, x) : _map_cotangent(f, x, Δ)
 end
+
+# A leaf with no numbers, one whose `parameter_eltype` is `Union{}`, has no zero and stays `nothing`.
+_zero_leaf(x) = parameter_eltype(x) === Union{} ? nothing : mapstorage(zero, x)
 
 # Each cotangent is normalised once, because unthunking a thunk computes it again. The structural
 # tangent of a set whose `params` is a zero is a hole too, and otherwise comes back as

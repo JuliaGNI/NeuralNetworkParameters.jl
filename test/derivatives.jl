@@ -96,14 +96,15 @@ end
     @test Zygote.gradient(f, sv)[1] ≈ 2 .* sv
 end
 
-@testset "an untouched leaf gets a zero leaf" begin
+@testset "an untouched leaf gets a zero leaf ($T)" for T in (Float32, Float64)
     # the `ZygoteRules` extension rewraps the pullback's `NamedTuple`, in which an untouched layer is
     # `nothing`; the gradient holds a zero leaf there instead
-    two = NetworkParameters((a = [1.0, 2.0], b = [3.0, 4.0]))
+    two = NetworkParameters((a = T[1, 2], b = T[3, 4]))
     g = Zygote.gradient(p -> sum(p.a), two)[1]
-    @test g isa NetworkParameters{Float64}
-    @test g.b == [0.0, 0.0]
-    @test g.a == [1.0, 1.0]
+    @test g isa NetworkParameters{T}
+    @test g.b == zeros(T, 2)
+    @test g.b isa Vector{T}
+    @test g.a == ones(T, 2)
 end
 
 @testset "a set the reverse pass never touched comes back as `nothing`" begin
@@ -259,6 +260,23 @@ NNP.rebuild(::Twelve, data) = Twelve(data...)
     full = NamedTuple{ntuple(i -> Symbol(:b, i), 12)}(ntuple(i -> T[i + 1], 12))
     @test collect(storage_gradient(x, ChainRulesCore.Tangent{typeof(x)}(; full...))) ==
           T.(2:13)
+end
+
+@testset "a tangent that leaves out a leading block is matched by field ($T)" for T in (
+    Float32, Float64)
+    # a `Tangent` need not hold every field, nor hold them in order: each block takes the component
+    # of its own field, and a block the tangent leaves out is a zero block
+    x = Lift(Sym(T[0.7, -0.8, 0.9], 2), T[0.1 -0.2; 0.3 0.4], 4)
+    B = T[1 2; 3 4]
+    g = storage_gradient(x, ChainRulesCore.Tangent{typeof(x)}(; B = B))
+    @test g isa typeof(x)
+    @test g.A.S == zeros(T, 3)
+    @test g.B == B
+    g = storage_gradient(x,
+        ChainRulesCore.Tangent{typeof(x)}(; B = B, A = (S = T[1, 2, 3], n = nothing)))
+    @test g isa typeof(x)
+    @test g.A.S == T[1, 2, 3]
+    @test g.B == B
 end
 
 # ---------------------------------------------------------------------------------------------------
@@ -783,6 +801,53 @@ end
     @test Zygote.gradient(w -> loss(unflatten(l, w)), v)[1] == expected
 end
 
+@testset "a leaf with no numbers stays `nothing` in a gradient ($T)" for T in (Float32, Float64)
+    # a leaf whose `parameter_eltype` is `Union{}` has no zero leaf; every numeric leaf still gets one,
+    # at a leaf hole and inside a branch hole
+    ps = NetworkParameters((
+        a = T[1, 2], q = nothing, f = sin, L = (q = nothing, W = T[1 2; 3 4])))
+    loss(p) = sum(abs2, p.a)
+    for g in (Zygote.pullback(loss, ps)[2](one(T))[1], Zygote.gradient(loss, ps)[1])
+        @test g isa NetworkParameters
+        @test g.a == 2 .* ps.a
+        @test g.a isa Vector{T}
+        @test g.q === nothing
+        @test g.f === nothing
+        @test g.L.q === nothing
+        @test g.L.W == zeros(T, 2, 2)
+        @test g.L.W isa Matrix{T}
+    end
+end
+
+@testset "a cotangent of another precision gives a gradient of the leaf's ($T)" for T in (
+    Float32, Float64)
+    # the gradient of a leaf has the element type of the leaf, whatever the precision of its cotangent
+    S = T === Float32 ? Float64 : Float32
+    ps = NetworkParameters((a = T[1, 2], b = T[3, 4]))
+    v, l = flatten(ps)
+    both(p) = sum(abs2, p.a) + sum(abs2, one(S) .* p.b)
+    flat = Zygote.gradient(w -> both(unflatten(l, w)), v)[1]
+    @test flat isa Vector{T}
+    @test flat ≈ T[2, 4, 6, 8]
+    for g in (Zygote.pullback(both, ps)[2](one(T))[1], Zygote.gradient(both, ps)[1])
+        @test g isa NetworkParameters{T}
+        @test g.b isa Vector{T}
+        @test first(flatten(g)) == flat
+    end
+    one_leaf(p) = sum(abs2, one(S) .* p.a)
+    for g in (Zygote.pullback(one_leaf, ps)[2](one(T))[1], Zygote.gradient(one_leaf, ps)[1])
+        @test g isa NetworkParameters{T}
+        @test g.b == zeros(T, 2)
+        @test g.b isa Vector{T}
+    end
+    flat = Zygote.gradient(w -> one_leaf(unflatten(l, w)), v)[1]
+    @test flat isa Vector{T}
+    @test flat ≈ T[2, 4, 0, 0]
+end
+
+# A function barrier with concrete argument types, which calls `f` once before it measures.
+allocations(f::F, a::A) where {F, A} = (f(a); @allocated f(a))
+
 @testset "the flat rule allocates one vector ($T)" for T in (Float32, Float64)
     # the flat gradient is the one vector the rule has to allocate: the gradient set of dense leaves
     # holds the cotangent's own arrays
@@ -791,7 +856,6 @@ end
     _, pb = ChainRulesCore.rrule(unflatten, l, v)
     Δ = (params = params(unflatten(l, v)),)
     @test pb(Δ)[3] == v
-    cost = _pullback_allocs(pb, Δ)
-    @test cost ≥ sizeof(v)
-    @test cost < sizeof(v) + sizeof(v) ÷ 2
+    @test allocations(similar, v) > 0
+    @test allocations(pb, Δ) == allocations(similar, v)
 end
