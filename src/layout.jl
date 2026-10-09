@@ -195,7 +195,7 @@ end
 # `(offset + 1):offset`.
 #
 # **A helper called from a generator, so it has to be defined above both of them** — see the note in
-# `walk.jl` on world age, which `test/world_age_tests.jl` pins.
+# `walk.jl` on world age, which `test/integration/world_age.jl` pins.
 function _layout_body(n::Int, wrap)
     n == 0 && return :(($(wrap(:(()), :offset)), offset))
     body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]

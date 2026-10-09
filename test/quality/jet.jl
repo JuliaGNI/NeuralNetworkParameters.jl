@@ -1,10 +1,10 @@
 # JET.jl optimisation analysis of the hot paths. See https://github.com/aviatesk/JET.jl.
 #
 # The entry points are the functions of `src/` that a test file asserts with `@allocated`:
-# `flatten!` and `unflatten!` (`flatten.jl`, `wide_branches.jl`), `unflatten` (`flatten.jl`), the
+# `flatten!` and `unflatten!` (`flatten.jl`, `integration/wide_branches.jl`), `unflatten` (`flatten.jl`), the
 # walks `foreachparameters`, `mapparameters!`, `mapstorage!`, `foldparameters` and `foldstorage`,
 # `parameter_eltype`, the `NetworkParameters` constructor, `flatten(ps)`, `flatten(T, ps)` and the
-# `rrule` of each (`wide_branches.jl`), and the pullback of the `unflatten` rule (`derivatives.jl`).
+# `rrule` of each (`integration/wide_branches.jl`), and the pullback of the `unflatten` rule (`derivatives.jl`).
 #
 # Each entry point has one line per element type that a test outside `test/quality/` passes in a
 # direct call to the method the `@allocated` call reaches, at the argument types of one such call,
@@ -31,13 +31,13 @@ end
 NNP.freeparameters(b::Blocks) = b.data
 NNP.rebuild(::Blocks, data) = Blocks(data)
 
-# the 48-child branches of `wide_branches.jl`
+# the 48-child branches of `integration/wide_branches.jl`
 function wide_set(k)
     NamedTuple{Tuple(Symbol("p", i) for i in 1:k)}(Tuple(fill(Float32(i), 2, 2)
     for i in 1:k))
 end
 
-# the functions handed to the walks, in the shape of those in `wide_branches.jl` and `walk.jl`
+# the functions handed to the walks, in the shape of those in `integration/wide_branches.jl` and `walk.jl`
 bump2(_, _) = nothing
 fold2(acc, x, y) = acc + sum(x) * sum(y)
 addto!(d, s) = (d .+= s)
@@ -51,7 +51,7 @@ if JET_WORKS
         v64, l64 = flatten(ps64)
         noleaf = NetworkParameters(NamedTuple())
 
-        # `flatten.jl` "the in-place forms do not allocate" (`Float64`); `wide_branches.jl` "the
+        # `flatten.jl` "the in-place forms do not allocate" (`Float64`); `integration/wide_branches.jl` "the
         # in-place forms do not allocate at $k children" (`Float32`)
         @test isempty(JET.get_reports(JET.report_opt(flatten!,
             (typeof(v64), typeof(ps64), typeof(l64));
@@ -95,7 +95,7 @@ if JET_WORKS
             unflatten, (typeof(ls32), typeof(dual32));
             target_modules = (NeuralNetworkParameters,))))
 
-        # the walks: `wide_branches.jl` "the walks that take two sets do not allocate at $k
+        # the walks: `integration/wide_branches.jl` "the walks that take two sets do not allocate at $k
         # children" (`Float32`);
         # `walk.jl` "the in-place walks pair children by key, not by position", "in-place walks",
         # "a zipped fold pairs the leaves" and "foldstorage folds the storage and not the leaf"
@@ -136,7 +136,7 @@ if JET_WORKS
             (typeof(fold2), Float64, typeof(ps64), typeof(ps64));
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` "the element type of a branch of $k children costs nothing"
+        # `integration/wide_branches.jl` "the element type of a branch of $k children costs nothing"
         # (`Float32`); `leaves.jl` "parameter_eltype" (`Float64`, the mixed branch that promotes
         # to it) and "parameter_eltype is total where freeparameters is not" (`Union{}`);
         # `derivatives.jl` "unflatten carries Duals"
@@ -153,7 +153,7 @@ if JET_WORKS
             parameter_eltype, (typeof(NamedTuple()),);
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` (`Float32`); `parameters.jl` "the element type" (`Float64`, `Union{}`)
+        # `integration/wide_branches.jl` (`Float32`); `parameters.jl` "the element type" (`Float64`, `Union{}`)
         @test isempty(JET.get_reports(JET.report_opt(NetworkParameters, (typeof(ps32),);
             target_modules = (NeuralNetworkParameters,))))
         @test isempty(JET.get_reports(JET.report_opt(
@@ -163,7 +163,7 @@ if JET_WORKS
             NetworkParameters, (typeof(NamedTuple()),);
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` (`Float32`); `flatten.jl` "round trip" (`Float64`) and "the empty set
+        # `integration/wide_branches.jl` (`Float32`); `flatten.jl` "round trip" (`Float64`) and "the empty set
         # flattens to an empty vector" (`Union{}`); `derivatives.jl` "a gradient from the
         # `flatten` rule is not converted again ($T)", whose `f` flattens a set of `Dual`s of `T`
         # under `ForwardDiff.gradient`
@@ -180,7 +180,7 @@ if JET_WORKS
         @test isempty(JET.get_reports(JET.report_opt(flatten, (typeof(noleaf),);
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` (`Float32`); `flatten.jl` "element type follows the parameters" (a
+        # `integration/wide_branches.jl` (`Float32`); `flatten.jl` "element type follows the parameters" (a
         # `Float64` set into `Float32`); `leaves.jl` "a leaf that is not an array contributes
         # nothing to the promotion" (`Float64`)
         blocks = NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),))
@@ -193,7 +193,7 @@ if JET_WORKS
             flatten, (Type{Float64}, typeof(blocks));
             target_modules = (NeuralNetworkParameters,))))
 
-        # `wide_branches.jl` (`Float32`); `derivatives.jl` "`nothing` is a structural zero for the
+        # `integration/wide_branches.jl` (`Float32`); `derivatives.jl` "`nothing` is a structural zero for the
         # `flatten` rules too" (`Float64`)
         @test isempty(JET.get_reports(JET.report_opt(ChainRulesCore.rrule,
             (typeof(flatten), typeof(ps32)); target_modules = (NeuralNetworkParameters,))))
@@ -207,7 +207,7 @@ if JET_WORKS
             target_modules = (NeuralNetworkParameters,))))
 
         # the pullback of the `unflatten` rule: `derivatives.jl` "the pullback does not pay for the
-        # depth of the tree" (`Float64`); `wide_branches.jl` "the pullback of unflatten reaches a
+        # depth of the tree" (`Float64`); `integration/wide_branches.jl` "the pullback of unflatten reaches a
         # branch of $k children" (`Float32`)
         L = [1.0, 2.0]
         flat = NetworkParameters((a = L, b = L, c = L, d = L))

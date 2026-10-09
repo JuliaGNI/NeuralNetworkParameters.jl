@@ -13,6 +13,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 - `Pkg.test()` no longer runs the doctests. `test/quality/doctests.jl` is now the group `doctests`,
   which an empty `ARGS` does not run; `Pkg.test(test_args = ["doctests"])` runs it. In CI the
   Doctests job stays their runner, so the test matrix no longer runs them a second time.
+- **Two tests that mirror no source file moved to `test/integration/`.** `test/wide_branches.jl`
+  is now `test/integration/wide_branches.jl`, and `test/world_age.jl` is now
+  `test/integration/world_age.jl`. Each tests walks, layouts and rules from several files directly
+  under `src/`, and the test convention keeps a test file at the top level of `test/` only where it
+  mirrors `src/<name>.jl`. Their labels and group are unchanged. No source file changes beyond the
+  path in two comments.
 
 ## [0.4.2] — 2026-10-02
 
