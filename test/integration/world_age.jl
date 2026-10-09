@@ -97,7 +97,7 @@ exit(0)
 """
 
 @testset "the generated walks survive a from-source load" begin
-    project = dirname(@__DIR__)
+    project = dirname(dirname(@__DIR__))
     cmd = `$(Base.julia_cmd()) --startup-file=no --compiled-modules=no --project=$project
            -e $_WORLD_AGE_PROGRAM`
     @test success(pipeline(cmd; stdout = devnull, stderr = devnull))

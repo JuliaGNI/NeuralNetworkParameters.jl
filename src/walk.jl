@@ -362,7 +362,7 @@ end
 # `MethodError: no method matching _children_arity(…)  The applicable method may be too new`. Loading
 # a precompiled package hides this, because deserialising the cache gives every method in the module
 # one world age -- so it is only seen when the sources are evaluated, which is what
-# `--compiled-modules=no` does and what `test/world_age_tests.jl` pins. `src/flatten.jl`'s two callers
+# `--compiled-modules=no` does and what `test/integration/world_age.jl` pins. `src/flatten.jl`'s two callers
 # are covered by `walk.jl` being included first.
 #
 # The same holds for everything else a generator here reaches: `_check_arity`, `_arity_error`,
