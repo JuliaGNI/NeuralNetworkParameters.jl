@@ -17,6 +17,6 @@ if "core" in GROUPS
     @safetestset "HDF5" include("io.jl")
     @safetestset "GeometricBase" include("norms.jl")
 end
-if "slow" in GROUPS
+if "doctests" in GROUPS
     @safetestset "Doctests" include("quality/doctests.jl")
 end
