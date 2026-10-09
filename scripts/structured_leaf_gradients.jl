@@ -14,7 +14,8 @@
 # through a direct read of its storage field. In each case the flat gradient,
 # `Zygote.gradient(v -> loss(unflatten(layout, v)), v)`, and the structured one,
 # `Zygote.gradient(loss, ps)` followed by `flatten`, are equal, and both equal the central
-# difference.
+# difference. The third gives a `SymmetricMatrix` leaf a cotangent of the other precision, and the
+# gradient keeps the leaf's element type on both paths.
 
 using NeuralNetworkParameters
 using GeometricOptimizers
@@ -110,7 +111,25 @@ function both_paths()
     end
 end
 
+# A loss that multiplies the leaf by a constant of the other precision gives the leaf a cotangent of
+# that precision; the gradient has the leaf's element type on both paths.
+function other_precision()
+    @testset "a cotangent of another precision ($T)" for T in (Float32, Float64)
+        S = T === Float32 ? Float64 : Float32
+        ps = NetworkParameters((L = (X = SymmetricMatrix(T.(leaf(:symmetric).S), 3),),))
+        v, layout = flatten(ps)
+        loss(p) = sum(abs2, one(S) .* Matrix(p.L.X))
+        gflat = flat_gradient(loss, layout, v)
+        g = Zygote.gradient(loss, ps)[1]
+        @test gflat isa Vector{T}
+        @test g isa NetworkParameters{T}
+        @test g.L.X isa SymmetricMatrix{T}
+        @test first(flatten(g)) == gflat
+    end
+end
+
 @testset "structured leaf gradients" begin
     lift_probe()
     both_paths()
+    other_precision()
 end
