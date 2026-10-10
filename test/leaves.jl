@@ -70,7 +70,7 @@ end
     @test only(Base.return_types(parameter_eltype, Tuple{typeof(p32)})) <: Type{Float32}
 end
 
-@testset "parameter_eltype is total where freeparameters is not" begin
+@testset "parameter_eltype does not raise where freeparameters does" begin
     # every `NetworkParameters` runs its constructor through `parameter_eltype`, including sets that
     # hold no numbers at all, so this function cannot raise where `freeparameters` does
     @test parameter_eltype(nothing) === Union{}

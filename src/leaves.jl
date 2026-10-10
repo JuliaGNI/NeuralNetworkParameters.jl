@@ -96,7 +96,7 @@ end
     storage_gradient(leaf, Δ)
 
 The gradient with respect to the storage of `leaf` — its [`freeparameters`](@ref) — from the cotangent
-`Δ` that reverse-mode differentiation gives for it. The identity by default.
+`Δ` that reverse-mode differentiation gives for it.
 
 A structured leaf presents one interface and stores another, and AD differentiates the interface. For
 a symmetric matrix with storage ``S``, the cotangent is the *natural* one, a matrix ``G`` paired with

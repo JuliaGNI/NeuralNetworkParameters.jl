@@ -91,7 +91,7 @@ end
 
     # no numeric leaf. `SymbolicNeuralNetworks` builds empty sets, so this is exercised
     @test NetworkParameters(NamedTuple()) isa NetworkParameters{Union{}}
-    # a gap where an untouched layer's entries would be, as `docs/src/walks.md` shows
+    # a gap where a frozen layer's entries would be, as `docs/src/walks.md` shows
     @test NetworkParameters((p = [10.0], q = nothing)) isa NetworkParameters{Float64}
     @test NetworkParameters((q = nothing,)) isa NetworkParameters{Union{}}
     # a leaf this package cannot read numbers out of contributes nothing, exactly as a gap does:

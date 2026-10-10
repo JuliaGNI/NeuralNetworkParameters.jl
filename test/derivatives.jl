@@ -116,7 +116,7 @@ end
     @test Zygote.gradient(p -> 1.0, ps) === (nothing,)
     @test Zygote.gradient(p -> Float64(length(flatten(p)[2])), ps) === (nothing,)
     @test Zygote.gradient(p -> 1.0, params(ps)) === (nothing,)      # what it has to agree with
-    # a set that *was* touched still comes back wrapped, holes and all
+    # a set that *was* touched still comes back wrapped, with a zero leaf where it was not read
     @test Zygote.gradient(p -> sum(p.L1.W), ps)[1] isa NetworkParameters
 end
 
@@ -165,7 +165,7 @@ end
 _pullback_allocs(pb, Δ) = @allocated pb(Δ)
 
 @testset "the pullback does not pay for the depth of the tree" begin
-    # the same four leaves, once flat and once one to a layer. The walk is over layouts known at
+    # the same four leaves, once flat and once one to a layer. The walks are at keys known at
     # compile time, so the layering cannot show up in the bill. Before it was written this way the two
     # cost 1088 and 1664 bytes on Julia 1.13, against a 128-byte answer — the gap is the dynamic
     # dispatch a runtime-`Symbol` lookup into `l.children` forced at every child. Both now sit at the

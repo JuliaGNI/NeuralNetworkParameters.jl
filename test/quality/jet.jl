@@ -138,7 +138,7 @@ if JET_WORKS
 
         # `integration/wide_branches.jl` "the element type of a branch of $k children costs nothing"
         # (`Float32`); `leaves.jl` "parameter_eltype" (`Float64`, and the mixed branch that raises)
-        # and "parameter_eltype is total where freeparameters is not" (`Union{}`);
+        # and "parameter_eltype does not raise where freeparameters does" (`Union{}`);
         # `derivatives.jl` "unflatten carries Duals"
         a1 = NetworkParameters((a = [1.0],))
         mixed = (a = Float32[1], b = [2.0])
