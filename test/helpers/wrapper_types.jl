@@ -70,6 +70,30 @@ NNP.freeparameters(Y::Manifold) = Y.A
 NNP.rebuild(::Manifold, data) = Manifold(data)
 # and no `parameter_metadata`: the default, an empty `NamedTuple`, is the whole truth about this one
 
+# `Lift` mirrors `StiefelLieAlgHorMatrix` more closely than `TwoBlock`: a dense interface
+# `[A -Bᵀ; B 0]` over a `Sym` block and a plain one, its storage the two blocks in order. Its storage
+# gradient, defined beside `Sym`'s in `test/derivatives.jl`, converts the `Sym` block itself, as
+# GeometricOptimizers' lift does.
+struct Lift{T, ST <: Sym{T}} <: AbstractMatrix{T}
+    A::ST
+    B::Matrix{T}
+    N::Int
+end
+
+Base.size(g::Lift) = (g.N, g.N)
+
+function Base.getindex(g::Lift{T}, i::Int, j::Int) where {T}
+    n = g.A.n
+    i ≤ n && j ≤ n && return g.A[i, j]
+    i ≤ n && return -g.B[j - n, i]
+    j ≤ n && return g.B[i - n, j]
+    zero(T)
+end
+
+NNP.freeparameters(g::Lift) = (g.A, g.B)
+NNP.rebuild(g::Lift, data) = Lift(data[1], data[2], g.N)
+NNP.parameter_metadata(g::Lift) = (N = g.N,)
+
 "A three-number symmetric matrix and the five-number two-block lift built on it."
 sample_sym() = Sym([1.0, 2.0, 3.0], 2)
 sample_twoblock() = TwoBlock(Sym([4.0, 5.0, 6.0], 2), [7.0 8.0], 3)
@@ -79,6 +103,9 @@ sample_padded() = Padded(1, 2, 3, 4, 5, [1.0, 2.0, 3.0])
 
 "A four-number matrix that is its own storage."
 sample_manifold() = Manifold([1.0 2.0; 3.0 4.0])
+
+"A 4 × 4 lift over a three-number `Sym` block and a 2 × 2 block: 3 + 4 numbers."
+sample_lift() = Lift(Sym([0.7, -0.8, 0.9], 2), [0.1 -0.2; 0.3 0.4], 4)
 
 "A parameter set with an ordinary layer, a structured leaf and a multi-block leaf: 3 + 3 + 5 numbers."
 function sample_parameters()

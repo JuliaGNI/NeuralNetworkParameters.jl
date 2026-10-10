@@ -124,9 +124,10 @@ parameter_eltype
 and of everything computed from the flat vector afterwards. It is also what a
 [`NetworkParameters`](@ref) derives its element-type parameter from, at construction.
 
-Because every parameter set runs its constructor through this function, it is total where
-[`freeparameters`](@ref) is not: a leaf this package cannot read numbers out of contributes nothing to
-the promotion rather than raising, and so does a gap in a gradient tree. The protocol error comes from
+Because every parameter set runs its constructor through this function, it raises only for leaves of
+two element types, where [`freeparameters`](@ref) raises for a leaf without the protocol: a leaf this
+package cannot read numbers out of contributes no element type, and so does `nothing` in place of a
+leaf. A set has one element type, and nothing is promoted. The protocol error comes from
 [`parameterlayout`](@ref) instead, which is where it decides something — a set that cannot be
 flattened is still a set with an element type.
 
@@ -150,8 +151,8 @@ parameter_eltype(NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),)))
 Union{}
 ```
 
-`flatten` raises there rather than guessing an element type for numbers the promotion knows nothing
-about. One method more opts the leaf into the recursion, and the set flattens as itself again:
+`flatten` raises there rather than guessing an element type for numbers `parameter_eltype` knows
+nothing about. One method more opts the leaf into the recursion, and the set flattens as itself again:
 
 ```jldoctest protocol
 NNP.parameter_eltype(b::Blocks) = parameter_eltype(freeparameters(b))

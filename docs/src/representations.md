@@ -32,12 +32,12 @@ parameter set its own behaviour — saving it, flattening it, stepping an optimi
 methods whose every argument type is somebody else's. That is type piracy, and two packages doing it
 can silently disagree about the same call. Owning the type removes the problem at the root.
 
-The `T` is the element type the leaves promote to, carried on the type so that a method signature can
+The `T` is the element type of the leaves, carried on the type so that a method signature can
 bind it — `f(ps::NetworkParameters{T}) where {T}`, or a `Union` with `AbstractVector{T}`. A set is
 built from its keys and values with `NetworkParameters(NamedTuple{keys}(vals))`, since the braces name
 the element type rather than the keys, and it is derived rather than chosen: writing
 `NetworkParameters{T}(nt)` asserts `T` and raises if the leaves say otherwise. See
-[`parameter_eltype`](@ref) for what the promotion does and does not guarantee.
+[`parameter_eltype`](@ref): a set whose leaves have two element types is an error.
 
 Note that key *order* is part of the identity of a parameter set:
 

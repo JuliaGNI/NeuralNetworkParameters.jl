@@ -137,8 +137,8 @@ if JET_WORKS
             target_modules = (NeuralNetworkParameters,))))
 
         # `integration/wide_branches.jl` "the element type of a branch of $k children costs nothing"
-        # (`Float32`); `leaves.jl` "parameter_eltype" (`Float64`, the mixed branch that promotes
-        # to it) and "parameter_eltype is total where freeparameters is not" (`Union{}`);
+        # (`Float32`); `leaves.jl` "parameter_eltype" (`Float64`, and the mixed branch that raises)
+        # and "parameter_eltype does not raise where freeparameters does" (`Union{}`);
         # `derivatives.jl` "unflatten carries Duals"
         a1 = NetworkParameters((a = [1.0],))
         mixed = (a = Float32[1], b = [2.0])
@@ -182,7 +182,7 @@ if JET_WORKS
 
         # `integration/wide_branches.jl` (`Float32`); `flatten.jl` "element type follows the parameters" (a
         # `Float64` set into `Float32`); `leaves.jl` "a leaf that is not an array contributes
-        # nothing to the promotion" (`Float64`)
+        # no element type" (`Float64`)
         blocks = NetworkParameters((L1 = (B = Blocks([1.0, 2.0]),),))
         @test isempty(JET.get_reports(JET.report_opt(
             flatten, (Type{Float32}, typeof(ps32));

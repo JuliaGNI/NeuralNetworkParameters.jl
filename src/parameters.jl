@@ -44,7 +44,7 @@ ps = NetworkParameters((L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],)))
 
 # Element type
 
-The first type parameter is the element type the leaves promote to, so that `T` *binds* in a method
+The first type parameter is the element type of the leaves, so that `T` *binds* in a method
 signature:
 
 ```julia
@@ -57,22 +57,10 @@ element type from the *type* of the solution it is handed, and a parameter set c
 `OptimizerSolution{T}` union while it carried no such parameter.
 
 It is derived by [`parameter_eltype`](@ref) at construction and never chosen; naming it, as
-`NetworkParameters{T}(params)`, asserts it and raises if the leaves say otherwise. Note that it is a
-*promotion*, not a guarantee of uniformity — a mixed set reports the type its leaves promote to while
-each leaf keeps its own:
+`NetworkParameters{T}(params)`, asserts it and raises if the leaves say otherwise. Every numeric leaf
+has it: leaves of two element types raise an `ArgumentError` that names both, and nothing is promoted.
 
-```jldoctest
-using NeuralNetworkParameters
-
-ps = NetworkParameters((L1 = (W = Float32[1 2], b = [3.0]),))
-(ps isa NetworkParameters{Float64}, eltype(ps.L1.W))
-
-# output
-
-(true, Float32)
-```
-
-A set with nothing to promote — an empty one, or a gradient tree that is all gaps — reports `Union{}`.
+A set with no numeric leaf — an empty one, or one whose leaves are all `nothing` — reports `Union{}`.
 
 # Implementation
 
@@ -97,7 +85,7 @@ struct NetworkParameters{T, Keys, ValueTypes}
 end
 
 # A caller that names `T` is asserting it, so these check rather than trust: a
-# `NetworkParameters{T, Keys, ValueTypes}` whose leaves promote to something else has no inhabitants.
+# `NetworkParameters{T, Keys, ValueTypes}` whose leaves have another element type has no inhabitants.
 # The three-parameter form is not optional — `ChainRulesCore.construct` calls it from
 # `+(::P, ::Tangent{P})`, which is how a parameter set and a cotangent add.
 function NetworkParameters{T, Keys, ValueTypes}(nt) where {T, Keys, ValueTypes}
@@ -115,7 +103,7 @@ end
 
 @noinline function _element_type_error(ps, T)
     throw(ArgumentError(string(
-        "the leaves of these parameters promote to ", parameter_eltype(ps),
+        "the leaves of these parameters have the element type ", parameter_eltype(ps),
         ", not to ", T, ". The element type of a `NetworkParameters` is derived from its leaves ",
         "rather than chosen, so naming it asserts it.")))
 end

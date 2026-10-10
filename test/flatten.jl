@@ -31,9 +31,7 @@ end
 @testset "element type follows the parameters" begin
     @test eltype(first(flatten(NetworkParameters((a = Float32[1, 2],))))) === Float32
     @test eltype(first(flatten(NetworkParameters((a = [1.0],))))) === Float64
-    # mixed precision promotes rather than truncating
-    @test eltype(first(flatten(NetworkParameters((a = Float32[1], b = [2.0]))))) === Float64
-    # and an explicit type is honoured
+    # an explicit type is honoured
     @test eltype(first(flatten(Float32, NetworkParameters((a = [1.0],))))) === Float32
 end
 
