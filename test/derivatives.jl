@@ -890,6 +890,17 @@ end
     end
 end
 
+@testset "two gradients add with `nothing` at a leaf with no numbers ($T)" for T in (
+    Float32, Float64)
+    fs = NetworkParameters((a = T[1, 2], f = sin))
+    g = Zygote.gradient(p -> sum(p.a), fs)[1]
+    h = g + g
+    @test h isa NetworkParameters
+    @test h.a == 2 .* g.a
+    @test h.a isa Vector{T}
+    @test h.f === nothing
+end
+
 @testset "a cotangent of another precision gives a gradient of the leaf's ($T)" for T in (
     Float32, Float64)
     # the gradient of a leaf has the element type of the leaf, whatever the precision of its cotangent

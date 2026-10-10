@@ -303,4 +303,8 @@ _project_leaf(_, Δ) = Δ
 # `+`, and a loss that calls `flatten` twice has two `NetworkParameters` from the `flatten` rule to add.
 # A leaf adds at the level of its storage, so a structured leaf stays one rather than becoming the sum
 # of two dense interfaces.
-Base.:+(a::NetworkParameters, b::NetworkParameters) = mapstorage(+, a, b)
+Base.:+(a::NetworkParameters, b::NetworkParameters) = mapstorage(_add_storage, a, b)
+
+# A leaf with no numbers is `nothing` in both gradients, and their sum is `nothing`.
+_add_storage(a, b) = a + b
+mapstorage(::typeof(_add_storage), ::Nothing, ::Nothing) = nothing
