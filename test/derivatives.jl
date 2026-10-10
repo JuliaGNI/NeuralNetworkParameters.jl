@@ -998,12 +998,15 @@ allocations(f::F, a::A) where {F, A} = (f(a); @allocated f(a))
     # the flat gradient is the one vector the rule has to allocate: the gradient set of dense leaves
     # holds the cotangent's own arrays. The flat vector holds at least 1 MiB, so a second one is three
     # orders of magnitude above the 1 KiB that the two readings may differ by (Julia 1.11 adds 32 B).
+    # Each side is the least of five readings, because one reading can take in a collection.
     ps = NetworkParameters((L1 = (W = T.(reshape(1:(512 * 512), 512, 512)), b = T.(1:512)),))
     v, l = flatten(ps)
     @test sizeof(v) ≥ 2^20
     _, pb = ChainRulesCore.rrule(unflatten, l, v)
     Δ = (params = params(unflatten(l, v)),)
     @test pb(Δ)[3] == v
-    @test allocations(similar, v) > 0
-    @test abs(allocations(pb, Δ) - allocations(similar, v)) ≤ 1024
+    rule = minimum(_ -> allocations(pb, Δ), 1:5)
+    vector = minimum(_ -> allocations(similar, v), 1:5)
+    @test vector > 0
+    @test abs(rule - vector) ≤ 1024
 end
