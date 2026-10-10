@@ -124,16 +124,19 @@ A method converts an *array* cotangent only, and returns a leaf of the same type
 flat path reads with [`freeparameters`](@ref). Its element type is the leaf's,
 [`parameter_eltype`](@ref)`(leaf)`, whatever the precision of the cotangent: a loss that multiplies a
 `Float32` leaf by a `Float64` constant gives that leaf a `Float64` cotangent. The default method
-converts an array or a number cotangent to that element type, with no copy where the types match. A
-method that returns another element type makes the gradient set raise the `ArgumentError` of
-[`NetworkParameters`](@ref) for two element types.
+converts an array or a number cotangent of an `AbstractFloat` or `Integer` element type to that
+element type, with no copy where the types match, as `ChainRulesCore.ProjectTo` does. A cotangent of
+another number type, such as a `ForwardDiff.Dual` from forward-over-reverse differentiation, passes
+through unchanged. A gradient whose leaves end up with two element types raises the `ArgumentError`
+of [`NetworkParameters`](@ref) for two element types.
 
 A structural tangent over the leaf's fields, a `NamedTuple` or a `ChainRulesCore.Tangent`, comes from
 a loss that read the storage field directly and holds ``\partial L/\partial S`` already. The default
 method for it rebuilds the leaf with [`rebuild`](@ref) around the components of the tangent that
-belong to its storage — matched by key for a `NamedTuple` of blocks, and by the field each block is
-for a `Tuple` of blocks and for one block — each converted by this function in turn, with a zero
-block where the tangent has none.
+belong to its storage — matched by key for a `NamedTuple` of blocks, by field name for a `Tuple` of
+blocks, whose i-th block must be the leaf's i-th field, and for one block by the one field it is —
+each converted by this function in turn, with a zero block where the tangent has none. A storage that
+meets none of these raises an `ArgumentError`.
 
 # Extending
 
@@ -146,11 +149,14 @@ end
 """
 storage_gradient(leaf, Δ) = _in_eltype(parameter_eltype(leaf), Δ)
 
-# A leaf with no numbers has no element type to convert to.
-function _in_eltype(::Type{T}, Δ::AbstractArray) where {T}
+# Only a precision is converted, as `ChainRulesCore.ProjectTo` does: a cotangent of another number type,
+# a `ForwardDiff.Dual` among them, passes through. A leaf with no numbers has no element type to
+# convert to.
+const _Precision = Union{AbstractFloat, Integer}
+function _in_eltype(::Type{T}, Δ::AbstractArray{<:_Precision}) where {T}
     T === Union{} ? Δ : convert(AbstractArray{T}, Δ)
 end
-_in_eltype(::Type{T}, Δ::Number) where {T} = T === Union{} ? Δ : convert(T, Δ)
+_in_eltype(::Type{T}, Δ::_Precision) where {T} = T === Union{} ? Δ : convert(T, Δ)
 _in_eltype(_, Δ) = Δ
 
 """

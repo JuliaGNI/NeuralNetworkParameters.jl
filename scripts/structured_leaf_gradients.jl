@@ -14,8 +14,8 @@
 # through a direct read of its storage field. In each case the flat gradient,
 # `Zygote.gradient(v -> loss(unflatten(layout, v)), v)`, and the structured one,
 # `Zygote.gradient(loss, ps)` followed by `flatten`, are equal, and both equal the central
-# difference. The third gives a `SymmetricMatrix` leaf a cotangent of the other precision, and the
-# gradient keeps the leaf's element type on both paths.
+# difference. The third gives a `SymmetricMatrix` leaf and a dense leaf beside it a cotangent of the
+# other precision, and the gradient keeps the leaves' element type on both paths.
 
 using NeuralNetworkParameters
 using GeometricOptimizers
@@ -116,14 +116,21 @@ end
 function other_precision()
     @testset "a cotangent of another precision ($T)" for T in (Float32, Float64)
         S = T === Float32 ? Float64 : Float32
-        ps = NetworkParameters((L = (X = SymmetricMatrix(T.(leaf(:symmetric).S), 3),),))
+        # the dense leaf `W` takes this package's default conversion, the `SymmetricMatrix` leaf its own.
+        # Zygote projects the cotangent of a broadcast, and of a leaf inside a `NamedTuple` branch, to
+        # the leaf's precision, so `W` sits at the top of the set and is not broadcast: for
+        # `T = Float32` the loss is a `Float64`, and so is the cotangent of `W`
+        ps = NetworkParameters((L = (X = SymmetricMatrix(T.(leaf(:symmetric).S), 3),),
+            W = T[1 2; 3 4]))
         v, layout = flatten(ps)
-        loss(p) = sum(abs2, one(S) .* Matrix(p.L.X))
+        loss(p) = sum(abs2, one(S) .* Matrix(p.L.X)) + sum(abs2, p.W)
         gflat = flat_gradient(loss, layout, v)
         g = Zygote.gradient(loss, ps)[1]
         @test gflat isa Vector{T}
         @test g isa NetworkParameters{T}
         @test g.L.X isa SymmetricMatrix{T}
+        @test g.W isa Matrix{T}
+        @test g.W == 2 .* ps.W
         @test first(flatten(g)) == gflat
     end
 end

@@ -105,34 +105,51 @@ function storage_gradient(leaf, Δ::Union{NamedTuple, ChainRulesCore.Tangent})
     rebuild(leaf, _map_child(storage_gradient, s, _storage_cotangent(leaf, s, _cotangent_backing(Δ))))
 end
 
-# Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by the
-# field each block is, for a `Tuple` of blocks. A block the tangent leaves out is a structural zero.
+# Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by
+# field name, for a `Tuple` of blocks. A block the tangent leaves out is a structural zero.
 function _storage_cotangent(_, storage::NamedTuple, nt::NamedTuple)
     NamedTuple{keys(storage)}(_matching_named(storage, nt))
 end
-function _storage_cotangent(leaf, storage::Tuple, nt::NamedTuple)
-    map(block -> _storage_component(leaf, block, nt), storage)
+
+# Block i of a `Tuple` storage is the leaf's i-th field, and takes the component of that field's name.
+# The match is by name and not by value, because a number block is `===` to every equal number.
+@generated function _storage_cotangent(leaf, storage::Tuple, nt::NamedTuple)
+    names = fieldnames(leaf)
+    fieldcount(storage) ≤ length(names) || return :(_no_storage_field_error(leaf, nt))
+    blocks = [:(getfield(leaf, $i) === getfield(storage, $i) ?
+                _cotangent_get(nt, $(QuoteNode(names[i]))) :
+                _no_storage_field_error(leaf, nt))
+              for i in 1:fieldcount(storage)]
+    :(($(blocks...),))
 end
 
 # Storage in one block is one of the leaf's fields, `(S = …, n = …)` for a leaf whose storage is its `S`.
 _storage_cotangent(leaf, storage, nt::NamedTuple) = _storage_component(leaf, storage, nt)
 
-# Which field of the prototype the storage is, and the component of the cotangent that belongs to it,
-# decided in one generated body: the field names and the keys are literals on every arm, so neither the
-# `getfield` nor the `haskey` is a runtime question.
+# The one field of the prototype that the storage is, and the component of the cotangent that belongs
+# to it, in one generated body: the field names and the keys are literals on every arm, so neither the
+# `getfield` nor the `haskey` is a runtime question. A storage that is `===` to two fields raises, as
+# one that is none of them does.
 @generated function _storage_component(prototype, storage, nt)
+    names = fieldnames(prototype)
+    found = [Symbol(:found, i) for i in eachindex(names)]
+    tests = [:($(found[i]) = getfield(prototype, $i) === storage) for i in eachindex(names)]
     expr = :(_no_storage_field_error(prototype, nt))
-    for f in reverse(fieldnames(prototype))
-        expr = :(getfield(prototype, $(QuoteNode(f))) === storage ?
-                 _cotangent_get(nt, $(QuoteNode(f))) : $expr)
+    for i in reverse(eachindex(names))
+        expr = :($(found[i]) ? _cotangent_get(nt, $(QuoteNode(names[i]))) : $expr)
     end
-    expr
+    quote
+        $(tests...)
+        count(($(found...),)) ≤ 1 || _no_storage_field_error(prototype, nt)
+        $expr
+    end
 end
 
 @noinline function _no_storage_field_error(prototype, nt)
     throw(ArgumentError(string(
         "cannot read a cotangent of type `", typeof(nt), "` as the derivative of a leaf of type `",
-        typeof(prototype), "`: its `freeparameters` is none of its fields.")))
+        typeof(prototype), "`: its `freeparameters` is not exactly one of its fields, nor a `Tuple` ",
+        "whose i-th block is its i-th field.")))
 end
 
 @generated function _matching_named(storage::NamedTuple{Keys}, nt) where {Keys}

@@ -279,6 +279,50 @@ end
     @test g.B == B
 end
 
+# A leaf that keeps its numbers in two number blocks, one per field, and a leaf whose one number block
+# is its first field, beside a second field of the same type.
+struct NumPair{T} <: AbstractVector{T}
+    x::T
+    y::T
+end
+Base.size(::NumPair) = (2,)
+Base.getindex(p::NumPair, i::Int) = i == 1 ? p.x : p.y
+NNP.freeparameters(p::NumPair) = (p.x, p.y)
+NNP.rebuild(::NumPair, data) = NumPair(data...)
+
+struct NumFirst{T} <: AbstractVector{T}
+    x::T
+    y::T
+end
+Base.size(::NumFirst) = (1,)
+Base.getindex(p::NumFirst, ::Int) = p.x
+NNP.freeparameters(p::NumFirst) = p.x
+NNP.rebuild(p::NumFirst, data) = NumFirst(data, p.y)
+
+@testset "block i of a tuple storage is field i, whatever its value ($T)" for T in (
+    Float32, Float64)
+    # two equal number blocks each take the component of their own field
+    p = NumPair(one(T), one(T))
+    g = storage_gradient(p, ChainRulesCore.Tangent{typeof(p)}(; x = T(2), y = T(3)))
+    @test g isa NumPair{T}
+    @test (g.x, g.y) == (T(2), T(3))
+    ps = NetworkParameters((L = p,))
+    gz = Zygote.gradient(q -> q.L.x^2 + 3 * q.L.y, ps)[1]
+    @test gz.L isa NumPair{T}
+    @test (gz.L.x, gz.L.y) == (T(2), T(3))
+    v, l = flatten(ps)
+    @test Zygote.gradient(w -> (q = unflatten(l, w); q.L.x^2 + 3 * q.L.y), v)[1] == T[2, 3]
+end
+
+@testset "a storage that is two fields of the leaf raises ($T)" for T in (Float32, Float64)
+    # one block of storage is one field; equal to two, it is no field in particular
+    Δ = (x = T(2), y = T(3))
+    @test_throws ArgumentError storage_gradient(NumFirst(one(T), one(T)), Δ)
+    g = storage_gradient(NumFirst(one(T), T(5)), Δ)
+    @test g isa NumFirst{T}
+    @test (g.x, g.y) == (T(2), T(5))
+end
+
 # ---------------------------------------------------------------------------------------------------
 # The loss sees a `NetworkParameters`, and the storage gradient of a structured leaf
 # ---------------------------------------------------------------------------------------------------
@@ -845,17 +889,75 @@ end
     @test flat ≈ T[2, 4, 0, 0]
 end
 
+@testset "a number leaf and a direct cotangent of another precision ($T)" for T in (
+    Float32, Float64)
+    # the number arm of the conversion, through Zygote, and both directions of precision through a
+    # cotangent passed to `map_cotangent` and to the reverse rule of `unflatten` directly
+    S = T === Float32 ? Float64 : Float32
+    ps = NetworkParameters((s = one(T), a = T[1, 2], b = T[3, 4]))
+    v, l = flatten(ps)
+    scaled(p) = p.s * one(S) * sum(abs2, one(S) .* p.a)
+    g = Zygote.gradient(scaled, ps)[1]
+    @test g isa NetworkParameters{T}
+    @test g.s isa T
+    @test g.s == 5
+    flat = Zygote.gradient(w -> scaled(unflatten(l, w)), v)[1]
+    @test flat isa Vector{T}
+    @test flat ≈ T[5, 2, 4, 0, 0]
+    Δ = (params = (s = S(5), a = S[2, 4], b = nothing),)
+    g = NeuralNetworkParameters.map_cotangent(storage_gradient, ps, Δ)
+    @test g isa NetworkParameters{T}
+    @test g.s isa T
+    @test g.s == 5
+    @test g.a isa Vector{T}
+    @test g.a == T[2, 4]
+    @test g.b == zeros(T, 2)
+    _, pb = ChainRulesCore.rrule(unflatten, l, v)
+    @test pb(Δ)[3] isa Vector{T}
+    @test pb(Δ)[3] == T[5, 2, 4, 0, 0]
+end
+
+@testset "a cotangent of another number type passes through ($T)" for T in (Float32, Float64)
+    # forward over reverse with respect to a scale that is no parameter: the cotangent of the leaf is
+    # a `Dual`, which is no precision to convert; d/ds of 2 s² a is 4 s a
+    ps = NetworkParameters((a = T[1, 2],))
+    d = ForwardDiff.derivative(s -> Zygote.gradient(p -> sum(abs2, s .* p.a), ps)[1].a, one(T))
+    @test d ≈ 4 .* ps.a
+end
+
+# A leaf whose storage is a struct without the protocol, so it has no element type.
+struct OpaqueBox{T}
+    x::Vector{T}
+end
+struct Hidden{T} <: AbstractVector{T}
+    o::OpaqueBox{T}
+end
+Base.size(::Hidden) = (2,)
+Base.getindex(h::Hidden, i::Int) = h.o.x[i]
+NNP.freeparameters(h::Hidden) = h.o
+
+@testset "a leaf with no element type keeps its cotangent ($T)" for T in (Float32, Float64)
+    # there is no element type to convert to, so the default `storage_gradient` returns the cotangent
+    h = Hidden(OpaqueBox(T[1, 2]))
+    @test NNP.parameter_eltype(h) === Union{}
+    Δ = [1.0, 2.0]
+    @test storage_gradient(h, Δ) === Δ
+    @test storage_gradient(h, 3.0) === 3.0
+end
+
 # A function barrier with concrete argument types, which calls `f` once before it measures.
 allocations(f::F, a::A) where {F, A} = (f(a); @allocated f(a))
 
 @testset "the flat rule allocates one vector ($T)" for T in (Float32, Float64)
     # the flat gradient is the one vector the rule has to allocate: the gradient set of dense leaves
-    # holds the cotangent's own arrays
-    ps = NetworkParameters((L1 = (W = T.(reshape(1:4096, 64, 64)), b = T.(1:64)),))
+    # holds the cotangent's own arrays. The flat vector holds at least 1 MiB, so a second one is three
+    # orders of magnitude above the 1 KiB that the two readings may differ by (Julia 1.11 adds 32 B).
+    ps = NetworkParameters((L1 = (W = T.(reshape(1:(512 * 512), 512, 512)), b = T.(1:512)),))
     v, l = flatten(ps)
+    @test sizeof(v) ≥ 2^20
     _, pb = ChainRulesCore.rrule(unflatten, l, v)
     Δ = (params = params(unflatten(l, v)),)
     @test pb(Δ)[3] == v
     @test allocations(similar, v) > 0
-    @test allocations(pb, Δ) == allocations(similar, v)
+    @test abs(allocations(pb, Δ) - allocations(similar, v)) ≤ 1024
 end

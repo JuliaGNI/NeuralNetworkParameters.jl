@@ -29,7 +29,9 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   whole set that no rule touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing`
   in a source set.
 - **The gradient of a leaf has the leaf's element type**, whatever the precision of its cotangent. The
-  default `storage_gradient` converts an array or a number cotangent to `parameter_eltype(leaf)`, so a
+  default `storage_gradient` converts an array or a number cotangent whose element type is an
+  `AbstractFloat` or an `Integer` to `parameter_eltype(leaf)`, as `ChainRulesCore.ProjectTo` does.
+  A cotangent of another number type, such as a `ForwardDiff.Dual`, passes through unchanged. So a
   `Float32` set whose loss multiplies a leaf by a `Float64` constant has a `Float32` gradient, flat and
   structured. A `storage_gradient` method of a consumer returns its leaf's element type too.
 - **Every numeric leaf of a `NetworkParameters` has one element type.** Leaves of two element types
@@ -53,9 +55,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   of this release keeps: 4 658 928 to 4 654 320 bytes).
 - **A loss that reads the storage field of a structured leaf (`p.L.X.S`) gives a gradient that flattens.**
   `storage_gradient` of a `NamedTuple` or `ChainRulesCore.Tangent` cotangent rebuilds the leaf around its
-  storage blocks, matched by key or by field, and converts each block. Before, `flatten` of such a
-  gradient raised `no method of freeparameters for Nothing` for `SymmetricMatrix`, `SkewSymMatrix` and
-  lift leaves.
+  storage blocks and converts each. A `NamedTuple` of blocks matches by key; a `Tuple` matches by
+  field name, its i-th block the leaf's i-th field, so two equal number blocks each take their own
+  field's component. A single block matches the one field it is `===` to. A storage that matches
+  none of these, or a single block `===` to two fields, raises an `ArgumentError`. Before, `flatten` of
+  such a gradient raised `no method of freeparameters for Nothing` for `SymmetricMatrix`,
+  `SkewSymMatrix` and lift leaves.
 
 ## [0.4.2] — 2026-10-02
 
