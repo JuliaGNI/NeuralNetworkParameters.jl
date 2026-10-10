@@ -39,7 +39,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `parameter_eltype` no longer promotes, and a leaf with no numbers still contributes `Union{}`.
   `flatten(T, ps)` still converts to a named element type. A mixed-precision set that constructed on
   0.4.x now raises.
-- **`+` of two `NetworkParameters` is `mapstorage(+, a, b)`**, so a `nothing` leaf is no longer a zero.
+- **`+` of two `NetworkParameters` adds the storage of each leaf.** `nothing + nothing` is `nothing`, and a
+  `nothing` leaf beside a number is no longer read as a zero.
 
 ### Fixed
 
@@ -50,9 +51,11 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   reverse rule now converts the cotangent with `map_cotangent(storage_gradient, ps, Δ)` and flattens the
   result, so the flat gradient is the structured gradient flattened. The probe is
   `scripts/structured_leaf_gradients.jl`, which needs GeometricOptimizers in its environment. The reverse
-  rule also has no cotangent walk of its own now, so a Float32 flat gradient of the NNP-design benchmark
-  allocates slightly less (model A, `bench_grad.jl`, Julia 1.13.1, registered 0.4.2, whose `src/` the base
-  of this release keeps: 4 658 928 to 4 654 320 bytes).
+  rule also has no cotangent walk of its own now, so a Float32 flat gradient allocates slightly less.
+  Measured on model A, a `Chain` of eight 64×64 `tanh` dense layers and one 64→1 layer on a 64×256
+  batch, in `Float32` on Julia 1.13.1, one cold process per figure: the bytes allocated by the Zygote
+  gradient on a `NetworkParameters` along the flat path, the `flatten`/`unflatten` path. That is
+  4 658 928 bytes on the registered 0.4.2 and 4 654 320 bytes on this release.
 - **A loss that reads the storage field of a structured leaf (`p.L.X.S`) gives a gradient that flattens.**
   `storage_gradient` of a `NamedTuple` or `ChainRulesCore.Tangent` cotangent rebuilds the leaf around its
   storage blocks and converts each. A `NamedTuple` of blocks matches by key; a `Tuple` matches by
