@@ -323,6 +323,33 @@ end
     @test (g.x, g.y) == (T(2), T(5))
 end
 
+# A leaf whose tuple storage holds its fields in the other order, and one whose tuple storage has
+# more blocks than the leaf has fields.
+struct Swap{T} <: AbstractVector{T}
+    x::Vector{T}
+    y::Vector{T}
+end
+Base.size(s::Swap) = (length(s.x) + length(s.y),)
+Base.getindex(s::Swap, i::Int) = i ≤ length(s.y) ? s.y[i] : s.x[i - length(s.y)]
+NNP.freeparameters(s::Swap) = (s.y, s.x)
+NNP.rebuild(::Swap, data) = Swap(data[2], data[1])
+
+struct Thrice{T} <: AbstractVector{T}
+    x::Vector{T}
+    y::Vector{T}
+end
+Base.size(s::Thrice) = (2 * length(s.x) + length(s.y),)
+Base.getindex(s::Thrice, i::Int) = vcat(s.x, s.y, s.x)[i]
+NNP.freeparameters(s::Thrice) = (s.x, s.y, s.x)
+NNP.rebuild(::Thrice, data) = Thrice(data[1], data[2])
+
+@testset "a tuple storage that is not the leaf's fields in order raises ($T)" for T in (
+    Float32, Float64)
+    Δ = (x = T[1, 1], y = T[2, 2])
+    @test_throws ArgumentError storage_gradient(Swap(T[1, 2], T[3, 4]), Δ)
+    @test_throws ArgumentError storage_gradient(Thrice(T[1, 2], T[3, 4]), Δ)
+end
+
 # ---------------------------------------------------------------------------------------------------
 # The loss sees a `NetworkParameters`, and the storage gradient of a structured leaf
 # ---------------------------------------------------------------------------------------------------
@@ -915,6 +942,14 @@ end
     _, pb = ChainRulesCore.rrule(unflatten, l, v)
     @test pb(Δ)[3] isa Vector{T}
     @test pb(Δ)[3] == T[5, 2, 4, 0, 0]
+    # an integer cotangent is a precision too
+    g = NeuralNetworkParameters.map_cotangent(storage_gradient,
+        NetworkParameters((s = one(T), a = T[1, 2])), (params = (s = 3, a = [1, 2]),))
+    @test g isa NetworkParameters{T}
+    @test g.s isa T
+    @test g.s == 3
+    @test g.a isa Vector{T}
+    @test g.a == T[1, 2]
 end
 
 @testset "a cotangent of another number type passes through ($T)" for T in (Float32, Float64)
