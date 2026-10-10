@@ -23,7 +23,9 @@ import ZygoteRules
 # call `pullback(cx::Context, f)` would match this method as well as Zygote's.
 function ZygoteRules.pullback(f::Function, ps::NetworkParameters)
     y, pb = invoke(ZygoteRules.pullback, Tuple{Any, Vararg{Any}}, f, ps)
-    network_parameters_pullback(Δ) = (map_cotangent(storage_gradient, ps, _set_cotangent(pb(Δ))),)
+    # The closure stays out of its caller, so that `Zygote.gradient` does not fuse Zygote's reverse
+    # pass into itself.
+    @noinline network_parameters_pullback(Δ) = (map_cotangent(storage_gradient, ps, _set_cotangent(pb(Δ))),)
     y, network_parameters_pullback
 end
 
