@@ -13,10 +13,13 @@ function ChainRulesCore.rrule(::typeof(unflatten), layout::ParameterLayout, v::A
     ps = unflatten(layout, v)
 
     # The layout is built again from `ps`, which costs no allocation, rather than kept: the reverse
-    # pass keeps this closure, and a layout holds more than the set it describes.
+    # pass keeps this closure, and a layout holds more than the set it describes. The flat gradient
+    # has the element type of the gradient, which is not `v`'s for an integer `v` or a `Dual`
+    # cotangent.
     function unflatten_pullback(Δ)
         g = map_cotangent(storage_gradient, ps, Δ)
-        Δv = g === nothing ? zero(v) : flatten!(similar(v), g, parameterlayout(ps))
+        Δv = g === nothing ? _zero_block(v, _gradient_eltype(eltype(v))) :
+             flatten!(similar(v, parameter_eltype(g)), g, parameterlayout(ps))
         ChainRulesCore.NoTangent(), ChainRulesCore.NoTangent(), Δv
     end
 
@@ -102,7 +105,8 @@ _cotangent_get(nt::NamedTuple, k::Symbol) = haskey(nt, k) ? nt[k] : nothing
 
 function storage_gradient(leaf, Δ::Union{NamedTuple, ChainRulesCore.Tangent})
     s = freeparameters(leaf)
-    rebuild(leaf, _map_child(storage_gradient, s, _storage_cotangent(leaf, s, _cotangent_backing(Δ))))
+    Δs = _storage_cotangent(leaf, s, _cotangent_backing(Δ))
+    rebuild(leaf, _fill_holes(_map_child(storage_gradient, s, Δs)))
 end
 
 # Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by
@@ -174,9 +178,11 @@ keys for a `NamedTuple`, positional for a `Tuple`, and a `NetworkParameters` for
 
 A hole is `nothing`, any flavour of zero, or a `Tangent` with no fields. Where `Δ` as a whole is a
 hole, the result is `nothing`. A hole inside `Δ`, at a leaf or a whole branch, comes back as a zero
-leaf of each leaf's own type, `mapstorage(zero, leaf)`, and `f` never sees it. A leaf with no numbers,
-whose [`parameter_eltype`](@ref) is `Union{}` — `nothing`, or a function — has no zero and stays
-`nothing`. So the result is complete wherever `Δ` touched the set at all.
+leaf of each leaf's own type, and `f` never sees it. Its element type is that of the leaves `f`
+returned, so a gradient of `ForwardDiff.Dual`s has `Dual` zeros; where `f` returned no numbers, it is
+the leaf's own, or `float` of it for an `Integer` leaf. A leaf with no numbers, whose
+[`parameter_eltype`](@ref) is `Union{}` — `nothing`, or a function — has no zero and stays `nothing`.
+So the result is complete wherever `Δ` touched the set at all.
 
 `Δ` is the cotangent of `ps` itself, in the shape Zygote gives it, and a cotangent of another shape
 raises an `ArgumentError` at the first branch it does not fit. At a `NamedTuple` branch the cotangent
@@ -206,17 +212,47 @@ is.
 """
 function map_cotangent(f::F, x, Δ) where {F}
     Δ = _normalized_for(x, Δ)
-    Δ === nothing ? nothing : _map_cotangent(f, x, Δ)
+    Δ === nothing ? nothing : _fill_holes(_map_cotangent(f, x, Δ))
 end
 
-# A child of a branch: a hole there is a zero leaf, or a branch of zero leaves.
+# A child of a branch: a hole there is a `_Hole` at each leaf, or a branch of them, until the walk is
+# done and the element type of the gradient is known.
 function _map_child(f::F, x, Δ) where {F}
     Δ = _normalized_for(x, Δ)
-    Δ === nothing ? mapparameters(_zero_leaf, x) : _map_cotangent(f, x, Δ)
+    Δ === nothing ? mapparameters(_hole, x) : _map_cotangent(f, x, Δ)
 end
 
 # A leaf with no numbers, one whose `parameter_eltype` is `Union{}`, has no zero and stays `nothing`.
-_zero_leaf(x) = parameter_eltype(x) === Union{} ? nothing : mapstorage(zero, x)
+_hole(x) = parameter_eltype(x) === Union{} ? nothing : _Hole(x)
+
+# The place of a zero leaf for `leaf`. It has no element type, as a leaf without numbers has none, so
+# the gradient's element type is that of the leaves `f` returned.
+struct _Hole{X}
+    leaf::X
+end
+
+# A hole becomes a zero leaf in the element type `S` of the leaves around it, or, where they hold no
+# numbers, in the leaf's own gradient element type. The named walk is written out for the reason the
+# head of `walk.jl` gives.
+_fill_holes(g) = _filled(parameter_eltype(g), g)
+
+function _filled(::Type{S}, g::NetworkParameters) where {S}
+    NetworkParameters(_filled(S, params(g)))
+end
+@generated function _filled(::Type{S}, g::NamedTuple{Keys}) where {S, Keys}
+    :(NamedTuple{Keys}(($((:(_filled(S, getfield(g, $i))) for i in eachindex(Keys))...),)))
+end
+@inline _filled(::Type, ::Tuple{}) = ()
+@inline _filled(::Type{S}, g::Tuple) where {S} = (
+    _filled(S, first(g)), _filled(S, Base.tail(g))...)
+_filled(::Type, y) = y
+function _filled(::Type{S}, h::_Hole) where {S}
+    T = S === Union{} ? _gradient_eltype(parameter_eltype(h.leaf)) : S
+    mapstorage(Base.Fix2(_zero_block, T), h.leaf)
+end
+
+_zero_block(b::AbstractArray, T) = fill!(similar(b, T), zero(T))
+_zero_block(::Number, T) = zero(T)
 
 # Each cotangent is normalised once, because unthunking a thunk computes it again. The structural
 # tangent of a set whose `params` is a zero is a hole too, and otherwise comes back as
@@ -308,3 +344,12 @@ Base.:+(a::NetworkParameters, b::NetworkParameters) = mapstorage(_add_storage, a
 # A leaf with no numbers is `nothing` in both gradients, and their sum is `nothing`.
 _add_storage(a, b) = a + b
 mapstorage(::typeof(_add_storage), ::Nothing, ::Nothing) = nothing
+
+# A loss that calls `flatten` and reads the set too has a gradient from the `flatten` rule and the
+# structural tangent `(params = …,)` of the read to add. The tangent is converted to a gradient first,
+# with the gradient's leaves in place of the primal ones, which `storage_gradient` permits.
+function Base.:+(a::NetworkParameters, b::NamedTuple{(:params,)})
+    g = map_cotangent(storage_gradient, a, b)
+    g === nothing ? a : a + g
+end
+Base.:+(b::NamedTuple{(:params,)}, a::NetworkParameters) = a + b

@@ -24,16 +24,21 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 - **A leaf or branch the loss did not touch has a zero gradient, not a hole.** The gradient that the
   `ZygoteRules` extension returns, `map_cotangent`'s result and `ProjectTo(::NetworkParameters)` all
-  give `mapstorage(zero, leaf)` for each such leaf or branch, so every gradient flattens. A leaf with
-  no numbers (`nothing`, a function), whose `parameter_eltype` is `Union{}`, stays `nothing`. Only a
-  whole set that no rule touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing`
-  in a source set.
-- **The gradient of a leaf has the leaf's element type**, whatever the precision of its cotangent. The
-  default `storage_gradient` converts an array or a number cotangent whose element type is an
-  `AbstractFloat` or an `Integer` to `parameter_eltype(leaf)`, as `ChainRulesCore.ProjectTo` does.
-  A cotangent of another number type, such as a `ForwardDiff.Dual`, passes through unchanged. So a
-  `Float32` set whose loss multiplies a leaf by a `Float64` constant has a `Float32` gradient, flat and
-  structured. A `storage_gradient` method of a consumer returns its leaf's element type too.
+  give a zero for each such leaf or branch, in the element type of the leaves that the conversion
+  returned, so every gradient flattens. So a `ForwardDiff` over a `Zygote` gradient of a loss that
+  does not read every leaf gets `ForwardDiff.Dual` zeros, and the gradient has one element type.
+  Where the converted leaves hold no numbers, it is the leaf's own gradient element type. The flat
+  gradient of `unflatten` has the gradient's element type too. A leaf with no numbers (`nothing`, a
+  function), whose `parameter_eltype` is `Union{}`, stays `nothing`. Only a whole set that no rule
+  touched stays `nothing`, as Zygote gives it. The walks still skip a `nothing` in a source set.
+- **The gradient of a leaf has the leaf's element type, or `float` of it for an `Integer` leaf**,
+  whatever the precision of its cotangent. The default `storage_gradient` converts an array or a
+  number cotangent whose element type is an `AbstractFloat` or an `Integer` to that element type,
+  as `ChainRulesCore.ProjectTo` does, so an `Int` leaf has a `Float64` gradient. Its zero leaves
+  and the flat gradient of an integer vector have that element type too. A cotangent of another
+  number type, such as a `ForwardDiff.Dual`, passes through unchanged. So a `Float32` set whose
+  loss multiplies a leaf by a `Float64` constant has a `Float32` gradient, flat and structured. A
+  `storage_gradient` method of a consumer returns its leaf's gradient element type too.
 - **Every numeric leaf of a `NetworkParameters` has one element type.** Leaves of two element types
   raise an `ArgumentError` at construction that names both, e.g. `NetworkParameters((a = Float32[1], b = [1.0]))`.
   `parameter_eltype` no longer promotes, and a leaf with no numbers still contributes `Union{}`.
@@ -64,6 +69,13 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   none of these, or a single block `===` to two fields, raises an `ArgumentError`. Before, `flatten` of
   such a gradient raised `no method of freeparameters for Nothing` for `SymmetricMatrix`,
   `SkewSymMatrix` and lift leaves.
+- **A loss that calls `flatten(p)` and reads a field of `p`, such as `p.L1.W`, has a gradient.**
+  Zygote adds the gradient of the `flatten` rule to the structural tangent `(params = …,)` of the
+  read, in either order. The tangent is converted to a gradient first, with `storage_gradient`
+  given the gradient's leaves in place of the primal ones, and the two add. On 0.4.2 this raised
+  `MethodError`. This reverses the 0.4.0 Breaking Change for that loss. The `storage_gradient`
+  docstring now states what this needs: a method reads the type, the shape and the metadata of
+  its leaf, never its numbers.
 
 ## [0.4.2] — 2026-10-02
 

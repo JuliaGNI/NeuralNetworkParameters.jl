@@ -409,11 +409,16 @@ end
     @test g == NetworkParameters((params = (W = T[1, 1],), other = (b = T[2],)))
 end
 
-@testset "a loss mixing `flatten(p)` with a field of `p` raises" begin
+@testset "a loss mixing `flatten(p)` with a field of `p` adds the two gradients" begin
     # the `flatten` rule returns a gradient already in storage coordinates, a `NetworkParameters`, and
-    # a field access returns the structural tangent `(params = …,)`; Zygote cannot add the two
+    # a field access returns the structural tangent `(params = …,)`; their sum is the sum of the
+    # gradients of the two terms, each taken alone
     ps = sample_network(Float64)
-    @test_throws MethodError Zygote.gradient(p -> sum(first(flatten(p))) + sum(p.L1.W), ps)
+    g = Zygote.gradient(p -> sum(first(flatten(p))) + sum(p.L1.W), ps)[1]
+    g_flat = Zygote.gradient(p -> sum(first(flatten(p))), ps)[1]
+    g_read = Zygote.gradient(p -> sum(p.L1.W), ps)[1]
+    @test g isa NetworkParameters{Float64}
+    @test first(flatten(g)) == first(flatten(g_flat)) + first(flatten(g_read))
 end
 
 # `Frob` stands in for a structured leaf with a projection of its own and no storage gradient beyond
@@ -969,6 +974,73 @@ end
     ps = NetworkParameters((a = T[1, 2],))
     d = ForwardDiff.derivative(s -> Zygote.gradient(p -> sum(abs2, s .* p.a), ps)[1].a, one(T))
     @test d ≈ 4 .* ps.a
+end
+
+@testset "an unread leaf has zeros of the gradient's number type ($T)" for T in (Float32, Float64)
+    # forward over reverse with a second leaf that the loss does not read: its zero leaf is a `Dual`
+    # leaf, as the converted leaf is, so the gradient has one element type
+    ps = NetworkParameters((a = T[1, 2], b = T[3, 4]))
+    v, l = flatten(ps)
+    scaled(s, p) = sum(abs2, s .* p.a)
+    structured(s) = Zygote.gradient(p -> scaled(s, p), ps)[1]
+    g = structured(ForwardDiff.Dual(one(T), one(T)))
+    @test g isa NetworkParameters{<:ForwardDiff.Dual}
+    @test g.b isa Vector{<:ForwardDiff.Dual}
+    @test ForwardDiff.derivative(s -> structured(s).a, one(T)) ≈ 4 .* ps.a
+    @test ForwardDiff.derivative(s -> structured(s).b, one(T)) == zeros(T, 2)
+    flat(s) = Zygote.gradient(w -> scaled(s, unflatten(l, w)), v)[1]
+    @test ForwardDiff.derivative(flat, one(T)) ≈ T[4, 8, 0, 0]
+end
+
+@testset "an integer leaf has a floating-point gradient" begin
+    # as `ChainRulesCore.ProjectTo` gives it: the gradient of an `Int` leaf is in `float(Int)`, and so
+    # is the zero leaf of an `Int` leaf that the loss does not read
+    ps = NetworkParameters((a = [1, 2], b = [3, 4], c = [5, 6]))
+    intloss(p) = sum(abs2, p.a .* 0.5) + sum(p.b)
+    for g in (Zygote.pullback(intloss, ps)[2](1.0)[1], Zygote.gradient(intloss, ps)[1])
+        @test g isa NetworkParameters{Float64}
+        @test g.a == [0.5, 1.0]
+        @test g.b == [1.0, 1.0]
+        @test g.c == zeros(2)
+        @test g.c isa Vector{Float64}
+    end
+    v, l = flatten(ps)
+    @test v isa Vector{Int}
+    flat = Zygote.gradient(w -> intloss(unflatten(l, w)), v)[1]
+    @test flat isa Vector{Float64}
+    @test flat == [0.5, 1.0, 1.0, 1.0, 0.0, 0.0]
+end
+
+@testset "a loss that flattens the set and reads a leaf ($T)" for T in (Float32, Float64)
+    # the cotangent of `p` is the storage gradient that the `flatten` rule gives plus the structural
+    # tangent of the read, in either order
+    ps = NetworkParameters((a = T[1, 2], b = T[3, 4]))
+    flat_first(p) = sum(first(flatten(p)) .* 2) + sum(abs2, p.a)
+    read_first(p) = sum(abs2, p.a) + sum(first(flatten(p)) .* 2)
+    for f in (flat_first, read_first)
+        g = Zygote.gradient(f, ps)[1]
+        @test g isa NetworkParameters{T}
+        @test g.a == T[4, 6]
+        @test g.b == T[2, 2]
+    end
+end
+
+@testset "a loss that flattens the set and reads a structured leaf ($kind, $T)" for kind in (
+        :sym, :lift),
+    T in (Float32, Float64)
+    # the read is converted once, by the leaf's own method, and the flattened part is not converted
+    ps64 = NetworkParameters((L = (X = leaf_of(kind),),))
+    v64, layout64 = flatten(ps64)
+    both(p) = sum(first(flatten(p)) .* (1:length(v64))) + use_once(p)
+    reference = central_difference(both, layout64, v64)
+    ps = mapstorage(x -> T.(x), ps64)
+    v, layout = flatten(ps)
+    g = Zygote.gradient(both, ps)[1]
+    @test g isa NetworkParameters{T}
+    @test g.L.X isa typeof(ps.L.X)
+    @test isapprox(first(flatten(g)), reference; rtol = tolerance(T))
+    flat = Zygote.gradient(w -> both(unflatten(layout, w)), v)[1]
+    @test isapprox(flat, reference; rtol = tolerance(T))
 end
 
 # A leaf whose storage is a struct without the protocol, so it has no element type.

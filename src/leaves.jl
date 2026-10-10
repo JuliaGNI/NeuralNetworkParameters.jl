@@ -122,13 +122,18 @@ struct for `f`, or a set held inside another argument. Those return the structur
 
 A method converts an *array* cotangent only, and returns a leaf of the same type, whose storage the
 flat path reads with [`freeparameters`](@ref). Its element type is the leaf's,
-[`parameter_eltype`](@ref)`(leaf)`, whatever the precision of the cotangent: a loss that multiplies a
-`Float32` leaf by a `Float64` constant gives that leaf a `Float64` cotangent. The default method
-converts an array or a number cotangent of an `AbstractFloat` or `Integer` element type to that
-element type, with no copy where the types match, as `ChainRulesCore.ProjectTo` does. A cotangent of
-another number type, such as a `ForwardDiff.Dual` from forward-over-reverse differentiation, passes
-through unchanged. A gradient whose leaves end up with two element types raises the `ArgumentError`
-of [`NetworkParameters`](@ref) for two element types.
+[`parameter_eltype`](@ref)`(leaf)`, or `float` of it for an `Integer` leaf, whatever the precision of
+the cotangent: a loss that multiplies a `Float32` leaf by a `Float64` constant gives that leaf a
+`Float64` cotangent. The default method converts an array or a number cotangent of an
+`AbstractFloat` or `Integer` element type to that element type, with no copy where the types match,
+as `ChainRulesCore.ProjectTo` does. A cotangent of another number type, such as a `ForwardDiff.Dual`
+from forward-over-reverse differentiation, passes through unchanged. A gradient whose leaves end up
+with two element types raises the `ArgumentError` of [`NetworkParameters`](@ref) for two element
+types.
+
+A method reads the type, the shape and the metadata of `leaf`, never its numbers. The sum of a
+gradient and a structural tangent of the same set converts the tangent with the gradient's leaves in
+place of the primal ones.
 
 A structural tangent over the leaf's fields, a `NamedTuple` or a `ChainRulesCore.Tangent`, comes from
 a loss that read the storage field directly and holds ``\partial L/\partial S`` already. The default
@@ -154,10 +159,17 @@ storage_gradient(leaf, Δ) = _in_eltype(parameter_eltype(leaf), Δ)
 # convert to.
 const _Precision = Union{AbstractFloat, Integer}
 function _in_eltype(::Type{T}, Δ::AbstractArray{<:_Precision}) where {T}
-    T === Union{} ? Δ : convert(AbstractArray{T}, Δ)
+    T === Union{} ? Δ : convert(AbstractArray{_gradient_eltype(T)}, Δ)
 end
-_in_eltype(::Type{T}, Δ::_Precision) where {T} = T === Union{} ? Δ : convert(T, Δ)
+function _in_eltype(::Type{T}, Δ::_Precision) where {T}
+    T === Union{} ? Δ : convert(_gradient_eltype(T), Δ)
+end
 _in_eltype(_, Δ) = Δ
+
+# The element type of the gradient of a leaf of element type `T`: `float(T)` for an integer `T`, as
+# `ChainRulesCore.ProjectTo` gives it, and `T` otherwise.
+_gradient_eltype(::Type{T}) where {T} = T
+_gradient_eltype(::Type{T}) where {T <: Integer} = float(T)
 
 """
     parameter_metadata(x)
