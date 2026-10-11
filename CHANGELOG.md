@@ -28,22 +28,32 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `parameterlayout` takes 1.03 s here against 0.85 s on 0.5.0, `flatten` 2.08 s against 1.67 s, and
   `unflatten` 15.66 s against 15.41 s. The figures come from
   `scripts/wide_branch_cost.jl --in-process wrapped 369`. The allocations of `parameter_eltype`,
-  `flatten!`, `unflatten!` and `mapparameters!` are zero on both.
+  `flatten!`, `unflatten!` and `mapparameters!` are zero on both. The first call of
+  `map_cotangent(storage_gradient, ps, Δ)`, the reverse pass of every gradient, takes 1.05 s and
+  1.07 s here against 0.52 s and 0.50 s on 0.5.0, on a set of 369 leaves of two numbers with a
+  cotangent over 100 of them, inside `Base.invokelatest`, two cold processes per tree, Julia 1.13.1,
+  under a load average of about 4. A later call allocates 21 520 bytes on both.
 - **The comments in `src/` and `ext/` describe what the code does, in the present tense.** The
   measurements and the reasons that rest on them move to a new manual page, "Design notes"
   (`docs/src/design.md`), each with the Julia version and the script it was taken with.
-- **Fourteen internal helpers are removed, none of them public.** They are `_promote_eltypes`,
+- **Seventeen internal helpers are removed, none of them public.** They are `_promote_eltypes`,
   whose fold is now `_unrolled_foldl` with `_join_leaf_eltype`, `_anynothing`, `_foreach_zip`,
-  `_fold_zip`, `_map_zip_written`, `_flatten_children!`, `_unflatten_children`,
-  `_unflatten_children!`, `_layout_body`, `_storage_component`, `_matching_named`,
-  `_map_cotangent_named`, `_map_cotangent_positional` and `_cotangent_get`.
+  `_foreach_step`, `_fold_zip`, `_fold_step`, `_map_zip_written`, `_storage_recurse`,
+  `_flatten_children!`, `_unflatten_children`, `_unflatten_children!`, `_layout_body`,
+  `_storage_component`, `_matching_named`, `_map_cotangent_named`, `_map_cotangent_positional` and
+  `_cotangent_get`.
+- **The error of two branches walked together with different keys, or a different number of
+  children, counts the sets and layouts of the walk.** It reads "in set or layout 2 of the walk"
+  where it read "in argument 2", which for `flatten!(v, ps, layout)` named the wrong argument.
 - **`PLAN.md` is deleted.** It was a stale plan, verified on 2026-08-28.
 
 ### Fixed
 
 - **`flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)` pair the children of a named branch
   with the layout by key.** A set whose keys differ from those of the layout raises an
-  `ArgumentError`, "parameter sets have different keys", and writes nothing. Before, the two paired
+  `ArgumentError`, "parameter sets have different keys", at the first branch where they differ. A
+  mismatch at the top level writes nothing; one further down raises after the leaves walked before
+  that branch are written. Before, the two paired
   the children by position: a set with the layout's keys in another order had each leaf written into
   another leaf's range, and a set with other key names was copied by position, both with no error.
   `test/flatten.jl` tests both directions in `Float32` and `Float64`.

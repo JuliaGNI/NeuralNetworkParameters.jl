@@ -1,6 +1,6 @@
 using NeuralNetworkParameters
 using NeuralNetworkParameters: _unrolled_map, _unrolled_foreach, _unrolled_foldl,
-                               _unrolled_mapaccum
+                               _unrolled_mapaccum, _FixFirst
 using Test
 
 struct Pair2{A, B}
@@ -8,13 +8,14 @@ struct Pair2{A, B}
     b::B
 end
 
-@testset "the unrolled map of a $(typeof(xs).name.name) branch" for xs in (
-    (a = 1.0, b = 2.0, c = 3.0), (1.0, 2.0, 3.0))
-    @test _unrolled_map(x -> 2x, xs) === (2.0, 4.0, 6.0)
-    # the further sets pair child by child
-    @test _unrolled_map(+, xs, xs, xs) === (3.0, 6.0, 9.0)
-    # a further set that is `nothing` hands `nothing` to every child
-    @test _unrolled_map((x, y) -> y, xs, nothing) === (nothing, nothing, nothing)
+@testset "the unrolled map of a keyed and a positional branch ($T)" for T in (Float32, Float64)
+    for xs in ((a = T(1), b = T(2), c = T(3)), (T(1), T(2), T(3)))
+        @test _unrolled_map(x -> 2x, xs) === (T(2), T(4), T(6))
+        # the further sets pair child by child
+        @test _unrolled_map(+, xs, xs, xs) === (T(3), T(6), T(9))
+        # a further set that is `nothing` hands `nothing` to every child
+        @test _unrolled_map((x, y) -> y, xs, nothing) === (nothing, nothing, nothing)
+    end
 end
 
 @testset "the unrolled map of an empty branch" begin
@@ -22,8 +23,23 @@ end
     @test _unrolled_map(identity, NamedTuple()) === ()
 end
 
-@testset "the unrolled map reads the fields of a struct" begin
-    @test _unrolled_map(identity, Pair2([1.0], 2)) == ([1.0], 2)
+@testset "the unrolled map reads the fields of a struct ($T)" for T in (Float32, Float64)
+    ys = _unrolled_map(identity, Pair2(T[1], T(2)))
+    @test ys isa Tuple{Vector{T}, T}
+    @test ys == (T[1], T(2))
+end
+
+# The walks bind their own first argument with `_FixFirst` and pass it one child of each set, so the
+# bound function takes any number of further arguments.
+@testset "the bound first argument passes every further argument ($T)" for T in (Float32, Float64)
+    g = _FixFirst(+, T(1))
+    @test g(T(2)) === T(3)
+    @test g(T(2), T(3)) === T(6)
+    @test g(T(2), T(3), T(4)) === T(10)
+    @test @inferred(_unrolled_map(g, (T(1), T(2)), (T(3), T(4)))) === (T(5), T(7))
+    # a bound type is kept as its own type, so a walk over a type stays inferred
+    @test _FixFirst(convert, T) isa _FixFirst{typeof(convert), Type{T}}
+    @test @inferred(_unrolled_map(_FixFirst(convert, T), (1, 2.0))) === (T(1), T(2))
 end
 
 @testset "the unrolled map is inferred at a width of $k" for k in (3, 48, 369)
@@ -35,16 +51,17 @@ end
     end
 end
 
-@testset "the unrolled foreach visits the children in order" begin
+@testset "the unrolled foreach visits the children in order ($T)" for T in (Float32, Float64)
     seen = Any[]
-    @test _unrolled_foreach((x, y) -> push!(seen, (x, y)), (a = 1, b = 2), (
-        a = 10, b = 20)) ===
+    @test _unrolled_foreach((x, y) -> push!(seen, (x, y)), (a = T(1), b = T(2)), (
+        a = T(10), b = T(20))) ===
           nothing
-    @test seen == [(1, 10), (2, 20)]
+    @test seen == [(T(1), T(10)), (T(2), T(20))]
+    @test all(s -> s isa Tuple{T, T}, seen)
 
     # a further set that is `nothing` hands `nothing` to every child
     empty!(seen)
-    _unrolled_foreach((x, y) -> push!(seen, y), (1, 2), nothing)
+    _unrolled_foreach((x, y) -> push!(seen, y), (T(1), T(2)), nothing)
     @test seen == [nothing, nothing]
 
     @test _unrolled_foreach(error, ()) === nothing
@@ -85,15 +102,18 @@ _running(s, x, y) = (s, s + x * y)
     @test _unrolled_mapaccum(error, :init, ()) === ((), :init)
 end
 
-@testset "the primitives check the arity and the keys" for walk in (
-    (xs, rest...) -> _unrolled_map(tuple, xs, rest...),
-    (xs, rest...) -> _unrolled_foreach(tuple, xs, rest...),
-    (xs, rest...) -> _unrolled_foldl(tuple, nothing, xs, rest...),
-    (xs, rest...) -> _unrolled_mapaccum((s, args...) -> (args, s), nothing, xs, rest...))
-    @test_throws "same number of children" walk((1, 2), (1,))
-    @test_throws "same number of children" walk((a = 1, b = 2), (a = 1,))
-    @test_throws "different keys" walk((a = 1, b = 2), (b = 1, a = 2))
-    @test_throws "different keys" walk((a = 1, b = 2), (a = 1, b = 2), (a = 1, c = 2))
+@testset "the primitives check the arity and the keys ($T)" for T in (Float32, Float64),
+    walk in (
+        (xs, rest...) -> _unrolled_map(tuple, xs, rest...),
+        (xs, rest...) -> _unrolled_foreach(tuple, xs, rest...),
+        (xs, rest...) -> _unrolled_foldl(tuple, nothing, xs, rest...),
+        (xs, rest...) -> _unrolled_mapaccum((s, args...) -> (args, s), nothing, xs, rest...))
+
+    x, y = T(1), T(2)
+    @test_throws "same number of children" walk((x, y), (x,))
+    @test_throws "same number of children" walk((a = x, b = y), (a = x,))
+    @test_throws "different keys" walk((a = x, b = y), (b = x, a = y))
+    @test_throws "different keys" walk((a = x, b = y), (a = x, b = y), (a = x, c = y))
 end
 
 @testset "a positional set beside a keyed one pairs by position" begin

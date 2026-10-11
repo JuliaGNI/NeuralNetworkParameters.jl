@@ -100,9 +100,9 @@ end
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
 @inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
-    Base.Fix1(_flatten!, v), ps, l.children)
+    _FixFirst(_flatten!, v), ps, l.children)
 @inline _flatten!(v, ps::Tuple, l::TupleLayout) = _unrolled_foreach(
-    Base.Fix1(_flatten!, v), ps, l.children)
+    _FixFirst(_flatten!, v), ps, l.children)
 @inline _flatten!(v, x, l::WrappedLayout) = _flatten!(v, freeparameters(x), l.inner)
 
 @inline function _flatten!(v, x, l::LeafLayout)
@@ -114,6 +114,9 @@ end
     copyto!(v, doffs, x, firstindex(x), n); nothing)
 @inline _copy_out!(v, doffs::Int, x::Number, ::Int) = (v[doffs] = x; nothing)
 
+# The three branch cases of `unflatten` below serve a vector and a Jacobian alike, since they read no
+# entry; only the leaf cases differ. A leaf takes its own stretch of a vector and is rebuilt, and takes
+# the corresponding *rows* of a Jacobian and is not.
 @doc raw"""
     unflatten(layout, v)
 
@@ -147,9 +150,6 @@ unflatten(layout, [10.0, 20.0, 30.0]).L1.W
 Each leaf is *copied* out of `v` rather than viewed into it, so the leaves are ordinary arrays and
 cannot alias each other or the flat vector.
 """
-# The three branch cases serve a vector and a Jacobian alike, since they read no entry; only the two
-# leaf cases below differ. A leaf takes its own stretch of a vector and is rebuilt, and takes the
-# corresponding *rows* of a Jacobian and is not.
 @inline unflatten(l::ParametersLayout, data::AbstractVecOrMat) = NetworkParameters(
     unflatten(l.inner, data))
 @inline unflatten(l::NestedLayout, data::AbstractVecOrMat) = NamedTuple{keys(l.children)}(_unrolled_map(
@@ -198,9 +198,9 @@ end
 
 @inline _unflatten!(ps::NetworkParameters, l::ParametersLayout, v) = _unflatten!(params(ps), l.inner, v)
 @inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unrolled_foreach(
-    Base.Fix1(_unflatten_from!, v), ps, l.children)
+    _FixFirst(_unflatten_from!, v), ps, l.children)
 @inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unrolled_foreach(
-    Base.Fix1(_unflatten_from!, v), ps, l.children)
+    _FixFirst(_unflatten_from!, v), ps, l.children)
 @inline _unflatten_from!(v, x, l) = _unflatten!(x, l, v)
 @inline _unflatten!(x, l::WrappedLayout, v) = _unflatten!(freeparameters(x), l.inner, v)
 

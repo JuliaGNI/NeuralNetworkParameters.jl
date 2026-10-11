@@ -20,6 +20,9 @@ A walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`, `Tuple` o
 *across* the children of one branch is one call of a primitive of `src/unrolled.jl`: a map, a left
 fold, and a map that carries a state from child to child. Each primitive is a generated body that
 reads child `i` with `getfield` at the literal index `i`. A foreach is the map, called for its effect.
+A walk binds its own function with the internal `_FixFirst` and not with `Base.Fix1`, because a
+primitive passes one child of each set, and `Base.Fix1` takes only one further argument on Julia
+1.11.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`
 children costs `k` specialisations whose argument types are each `O(k)` long. `flatten` on a flat set
@@ -31,8 +34,9 @@ took 0.17 s at 32 children, 2.2 s at 64, 17.6 s at 128, and more than ten minute
 type stable, and costs a dynamic dispatch and an allocation per child.
 
 **Why not `values` of the branch.** `values` materialises a temporary tuple per branch and per set.
-`mapparameters!` on a flat set of 48 children allocated 800 bytes a call that way, and 6 144 at 369;
-a branch of branches three to four times that. The primitives read every set in place.
+`mapparameters!(f, dest, src)` on a flat set of 48 children allocated 800 bytes a call that way, and
+6 144 at 369. Julia 1.13, NNP 0.2.2, bytes per call measured from inside a function; the 0.2.2
+entry of `CHANGELOG.md` has the table. The primitives read every set in place.
 
 **A fold reached through a caller that does not specialise.** A 369-leaf fold reached through a
 `@noinline` caller that does not annotate `op::F where {F}` allocates 3 088 bytes at arity one and
@@ -63,8 +67,7 @@ each child is laid out after the offset of the one before it, and gives the offs
 other forms do not work:
 
 - A left fold whose accumulator holds the children laid out so far gives one tuple type per child,
-  each longer than the last. On this branch, `parameterlayout` on a flat set of 369 did not finish in
-  four minutes, where the carried state takes about one second. Julia 1.13.1, a cold first call.
+  each longer than the last, so inference pays for a type that grows with every child.
 - The lengths of the children first, then each child laid out at its own offset, passes the offsets
   as a tuple of `Int`s beside the branch. For a structured leaf whose storage has more blocks than its
   branch has children, that tuple grows from one level of the recursion to the next, and inference
@@ -83,7 +86,8 @@ it the two shapes cost the same: 1.05 s wrapped against 1.04 s bare at 369, 3.01
 `scripts/wide_branch_cost.jl`, whose shared row agrees to 0.1 s.
 
 A leaf is terminal or wrapped by dispatch on the type of its storage. An `===` test in one method
-body gave each leaf layout a three-way union, and `parameterlayout` on the 369-leaf set took 11.7 s.
+body gave each leaf layout a three-way union, which inference then carries through every child of a
+branch.
 A leaf whose `freeparameters` returns a distinct object of its own type is terminal by this rule;
 such a leaf has no working layout either way, since the descent into its storage does not end.
 

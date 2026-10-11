@@ -323,8 +323,8 @@ end
     @test (g.x, g.y) == (T(2), T(5))
 end
 
-# A leaf whose tuple storage holds its fields in the other order, and one whose tuple storage has
-# more blocks than the leaf has fields.
+# A leaf whose tuple storage holds its fields in the other order, one whose tuple storage has
+# more blocks than the leaf has fields, and one whose second block is its first field again.
 struct Swap{T} <: AbstractVector{T}
     x::Vector{T}
     y::Vector{T}
@@ -343,11 +343,40 @@ Base.getindex(s::Thrice, i::Int) = vcat(s.x, s.y, s.x)[i]
 NNP.freeparameters(s::Thrice) = (s.x, s.y, s.x)
 NNP.rebuild(::Thrice, data) = Thrice(data[1], data[2])
 
+struct Dup{T} <: AbstractVector{T}
+    x::Vector{T}
+    y::Vector{T}
+end
+Base.size(s::Dup) = (2 * length(s.x),)
+Base.getindex(s::Dup, i::Int) = vcat(s.x, s.x)[i]
+NNP.freeparameters(s::Dup) = (s.x, s.x)
+NNP.rebuild(s::Dup, data) = Dup(data[1], s.y)
+
 @testset "a tuple storage that is not the leaf's fields in order raises ($T)" for T in (
     Float32, Float64)
     Δ = (x = T[1, 1], y = T[2, 2])
     @test_throws ArgumentError storage_gradient(Swap(T[1, 2], T[3, 4]), Δ)
     @test_throws ArgumentError storage_gradient(Thrice(T[1, 2], T[3, 4]), Δ)
+    @test_throws ArgumentError storage_gradient(Dup(T[1, 2], T[3, 4]), Δ)
+end
+
+# A leaf whose other field holds a copy of its storage. The storage is the field it is `===` to, and
+# not a field equal to it in value.
+struct WithCopy{T} <: AbstractVector{T}
+    reference::Vector{T}
+    S::Vector{T}
+end
+Base.size(x::WithCopy) = size(x.S)
+Base.getindex(x::WithCopy, i::Int) = x.S[i]
+NNP.freeparameters(x::WithCopy) = x.S
+NNP.rebuild(x::WithCopy, d) = WithCopy(x.reference, d)
+
+@testset "a field equal in value to the storage is not the storage ($T)" for T in (
+    Float32, Float64)
+    ps = NetworkParameters((L = WithCopy(T[3, 4], T[3, 4]),))
+    g = only(Zygote.gradient(p -> sum(abs2, p.L.S), ps))
+    @test g.L isa WithCopy{T}
+    @test NNP.freeparameters(g.L) == T[6, 8]
 end
 
 # A leaf whose one field is a `Tuple` of blocks, which is its storage. Block 1 is not the leaf's first

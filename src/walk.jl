@@ -133,11 +133,11 @@ See [`mapparameters!`](@ref) for the in-place variant that returns its destinati
 @inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
     _unrolled_foreach(
-        Base.Fix1(foreachparameters, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
+        _FixFirst(foreachparameters, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
 end
 
 @inline function foreachparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(Base.Fix1(foreachparameters, f), ps, map(_as_tuple, rest)...)
+    _unrolled_foreach(_FixFirst(foreachparameters, f), ps, map(_as_tuple, rest)...)
 end
 
 @inline function foreachparameters(f, x, rest::Vararg{Any, N}) where {N}
@@ -177,11 +177,11 @@ end
 @inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple},
         rest::Vararg{Any, N}) where {N}
     _unrolled_foreach(
-        Base.Fix1(_foreach_storage, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
+        _FixFirst(_foreach_storage, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
 end
 
 @inline function _foreach_storage(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(Base.Fix1(_foreach_storage, f), ps, map(_as_tuple, rest)...)
+    _unrolled_foreach(_FixFirst(_foreach_storage, f), ps, map(_as_tuple, rest)...)
 end
 
 @inline function _foreach_storage(f, x, rest::Vararg{Any, N}) where {N}
@@ -255,13 +255,13 @@ foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
         rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     any(isnothing, nts) && _no_folded_skip_error()
-    _unrolled_foldl(Base.Fix1(foldparameters, op), init, _as_namedtuple(ps), nts...)
+    _unrolled_foldl(_FixFirst(foldparameters, op), init, _as_namedtuple(ps), nts...)
 end
 
 @inline function foldparameters(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N}
     ts = map(_as_tuple, rest)
     any(isnothing, ts) && _no_folded_skip_error()
-    _unrolled_foldl(Base.Fix1(foldparameters, op), init, ps, ts...)
+    _unrolled_foldl(_FixFirst(foldparameters, op), init, ps, ts...)
 end
 
 @inline foldparameters(op, init, x, rest::Vararg{Any, N}) where {N} = op(init, x, rest...)
@@ -298,13 +298,13 @@ foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
         rest::Vararg{Any, N}) where {N}
     nts = map(_as_namedtuple, rest)
     any(isnothing, nts) && _no_folded_skip_error()
-    _unrolled_foldl(Base.Fix1(foldstorage, op), init, _as_namedtuple(ps), nts...)
+    _unrolled_foldl(_FixFirst(foldstorage, op), init, _as_namedtuple(ps), nts...)
 end
 
 @inline function foldstorage(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N}
     ts = map(_as_tuple, rest)
     any(isnothing, ts) && _no_folded_skip_error()
-    _unrolled_foldl(Base.Fix1(foldstorage, op), init, ps, ts...)
+    _unrolled_foldl(_FixFirst(foldstorage, op), init, ps, ts...)
 end
 
 @inline function foldstorage(op, init, x, rest::Vararg{Any, N}) where {N}
@@ -346,7 +346,7 @@ const _WRITE_OUT_MAX_CHILDREN = 32
     # An out-of-place walk has nothing to put where a set is `nothing`.
     any(isnothing, rest) && _no_skipped_set_error()
     _children_arity(typeof(xs), map(typeof, rest))
-    g = Base.Fix1(recurse, f)
+    g = _FixFirst(recurse, f)
     fieldcount(typeof(xs)) > _WRITE_OUT_MAX_CHILDREN ? map(g, xs, rest...) :
     _unrolled_map(g, xs, rest...)
 end

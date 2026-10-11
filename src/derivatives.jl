@@ -262,12 +262,12 @@ end
 
 function _map_cotangent(f::F, x::NamedTuple{Keys}, Δ) where {F, Keys}
     Δx = _cotangents_at(x, _checked_branch(x, _cotangent_backing(Δ)))
-    NamedTuple{Keys}(_unrolled_map(Base.Fix1(_map_child, f), x, Δx))
+    NamedTuple{Keys}(_unrolled_map(_FixFirst(_map_child, f), x, Δx))
 end
 
 # The cotangent of a `Tuple` branch has its length, which `_checked_branch` has asked.
 function _map_cotangent(f::F, x::Tuple, Δ) where {F}
-    _unrolled_map(Base.Fix1(_map_child, f), x, _checked_branch(x, _cotangent_backing(Δ)))
+    _unrolled_map(_FixFirst(_map_child, f), x, _checked_branch(x, _cotangent_backing(Δ)))
 end
 
 # A set, the one a loss differentiates or one inside it: its gradient is a set too. Zygote hands its

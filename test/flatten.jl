@@ -143,7 +143,22 @@ end
         @test_throws "different keys" unflatten!(renamed, layout, T[1, 2, 3])
         @test v == zeros(T, 3)
         @test renamed == (c = T[5], d = T[6, 7])
+
+        # the message counts the layout as the second of the two things walked together, and does
+        # not call it an argument: it is the third argument of `flatten!`
+        @test_throws "in set or layout 2 of the walk" flatten!(v, renamed, layout)
+
+        # a mismatch below the top level raises at the branch where the keys differ
+        nested = parameterlayout((a = T[1, 2], b = (c = T[3],)))
+        @test_throws "different keys" flatten!(zeros(T, 3), (a = T[5, 6], b = (d = T[7],)), nested)
+        @test_throws "different keys" unflatten!(
+            (a = T[5, 6], b = (d = T[7],)), nested, T[1, 2, 3])
     end
+end
+
+# The main docstring of `unflatten` is bound to its method, so the manual shows it and its doctest runs.
+@testset "the docstring of unflatten(layout, v) is bound" begin
+    @test occursin("Rebuild the parameter set that", string(@doc unflatten))
 end
 
 @testset "an immutable leaf cannot be written in place" begin

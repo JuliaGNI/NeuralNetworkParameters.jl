@@ -15,6 +15,19 @@
 # A generator runs in the world age of its own definition, so every helper that a generator calls is
 # defined above it. `test/integration/world_age.jl` loads the sources without a cache to check this.
 
+# `f` with its first argument bound to `x`, called with every further argument: a walk binds its own
+# function, or the flat vector, and a primitive passes it the child of each set. A type for `x` is
+# kept as `Type{x}`, as `Base.Fix1` keeps it, so a walk over a type stays inferred.
+struct _FixFirst{F, X} <: Function
+    f::F
+    x::X
+    _FixFirst(f::F, x) where {F} = new{F, _type_of_bound(x)}(f, x)
+end
+@inline (g::_FixFirst)(args::Vararg{Any, N}) where {N} = g.f(g.x, args...)
+
+_type_of_bound(x) = typeof(x)
+_type_of_bound(::Type{T}) where {T} = Type{T}
+
 # The number of children of the branch type `xs`, after a check that each further set has as many.
 # `rest` holds the types of the further sets; a `Nothing` among them has no children to count.
 function _children_arity(xs, rest::Tuple)
@@ -32,21 +45,21 @@ end
 
 @noinline _arity_error(n::Int, j::Int, m::Int) = throw(ArgumentError(string(
     "parameter sets walked together must have the same number of children at every level; ",
-    "got ", n, " and, in argument ", j, ", ", m, ".")))
+    "got ", n, " and, in set or layout ", j, " of the walk, ", m, ".")))
 
 # The keys of a branch type, or `nothing` for a branch that has none.
 _branch_keys(::Type{<:NamedTuple{Keys}}) where {Keys} = Keys
 _branch_keys(::Type) = nothing
 
 @noinline _child_keys_error(ks, rk, j::Int) = throw(ArgumentError(string(
-    "parameter sets have different keys: ", ks, " and, in argument ", j, ", ", rk)))
+    "parameter sets have different keys: ", ks, " and, in set or layout ", j, " of the walk, ", rk)))
 
 # Child `i` of the further set `j` of type `r`, as an expression: `nothing` for a set that is
 # `nothing`, and `getfield` at a literal index otherwise, after a check of the keys.
 function _child_expr(ks, r::Type, j::Int, i::Int)
     r === Nothing && return :nothing
     rk = _branch_keys(r)
-    # `j + 1`: the message counts the parameter sets, of which `xs` is the first
+    # `j + 1`: the message counts the sets and layouts walked together, of which `xs` is the first
     ks === nothing || rk === nothing || rk === ks || _child_keys_error(ks, rk, j + 1)
     :(getfield(rest[$j], $i))
 end

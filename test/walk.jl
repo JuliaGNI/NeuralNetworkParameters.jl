@@ -203,6 +203,18 @@ end
         a, NetworkParameters((L1 = [10.0], L2 = nothing))) == 10.0
 end
 
+# A `Tuple` branch against a set that is `nothing` raises as a keyed branch does: the branch of the
+# set, a set that is a `Tuple`, and a leaf whose storage is a `Tuple` of blocks.
+@testset "a fold of a tuple branch against a nothing set raises ($T)" for T in (Float32, Float64)
+    op = (acc, x, y) -> acc
+    @test_throws "partial sum" foldparameters(op, zero(T), (L = (T[1], T[2]),), (L = nothing,))
+    @test_throws "partial sum" foldparameters(op, zero(T), (T[1], T[2]), nothing)
+    @test_throws "partial sum" foldstorage(op, zero(T), (T[1], T[2]), nothing)
+    lift = Lift(Sym(T[0.7, -0.8, 0.9], 2), T[0.1 -0.2; 0.3 0.4], 4)
+    @test_throws "partial sum" foldstorage(op, zero(T),
+        NetworkParameters((L = lift,)), NetworkParameters((L = nothing,)))
+end
+
 @testset "a mapped tree takes its element type from what the map returned" begin
     @test mapstorage(x -> Float32.(x), ps) isa NetworkParameters{Float32}
     @test mapparameters(x -> Float32.(x), ps) isa NetworkParameters{Float32}
