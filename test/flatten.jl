@@ -144,9 +144,8 @@ end
         @test v == zeros(T, 3)
         @test renamed == (c = T[5], d = T[6, 7])
 
-        # the message counts the layout as the second of the two things walked together, and does
-        # not call it an argument: it is the third argument of `flatten!`
-        @test_throws "in set or layout 2 of the walk" flatten!(v, renamed, layout)
+        # the message calls the layout argument 2, its place in the walk (KNOWN_ISSUES.md K7)
+        @test_throws "and, in argument 2," flatten!(v, renamed, layout)
 
         # a mismatch below the top level raises at the branch where the keys differ
         nested = parameterlayout((a = T[1, 2], b = (c = T[3],)))

@@ -24,7 +24,8 @@ fixed; the fix goes in `CHANGELOG.md`.
   `NamedTuple` (`nt`), or the flat vector through `unflatten` (`flat`). On Julia 1.13.1 with Zygote
   0.7.13, `julia --project=. -e 'using TestEnv; TestEnv.activate();
   include("scripts/zygote_wide_set.jl")' nnp 369` prints `nnp 369: gradient taken, first call
-  293.3 s`. On Julia 1.12.7 with Zygote 0.7.13 and NeuralNetworkParameters 0.4.2, the same set
+  293.3 s; Julia 1.13.1, Zygote 0.7.13`. The script does not reproduce the stack overflow. On Julia
+  1.12.7 with Zygote 0.7.13 and NeuralNetworkParameters 0.4.2, the same set
   raised a `StackOverflowError` in Zygote's recursive `_unapply` over an `NTuple{110}` on all three
   paths, and the first call took 3.95, 5.9, 14.6 and 51.6 s at 16, 32, 64 and 128 leaves; that run
   of 2026-10-05 used a script outside this repository, of which `scripts/zygote_wide_set.jl` keeps
@@ -60,6 +61,20 @@ fixed; the fix goes in `CHANGELOG.md`.
   and its `nothing` leaf stays `nothing`, as the `map_cotangent` docstring says. No docstring says
   whether a `nothing` leaf has a flat form.
 - kind: found late
+- found: 2026-10-11
+
+### K7 · The key and arity messages call the layout of `flatten!` argument 2, where it is argument 3
+
+- location: `src/unrolled.jl`, `_arity_error` and `_child_keys_error`
+- evidence: `flatten!(zeros(3), (c = [5.0], d = [6.0, 7.0]), parameterlayout((a = [1.0], b =
+  [2.0, 3.0])))` raises `ArgumentError: parameter sets have different keys: (:c, :d) and, in
+  argument 2, (:a, :b)`. The messages count the sets and layouts walked together, of which the
+  layout is the second; in `flatten!(v, ps, layout)` it is argument 3. The wording is the same on
+  0.5.0 (`17d8356`). A downstream test of the optimiser package
+  (`test/integration/neural_network_parameters_protocol.jl`) matches `"and, in argument 2,"`, so a
+  new wording needs a change there first. `test/flatten.jl`, `test/walk.jl` and
+  `test/unrolled.jl` pin the wording as it is.
+- kind: defect
 - found: 2026-10-11
 
 ## Tests

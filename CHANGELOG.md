@@ -32,7 +32,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `map_cotangent(storage_gradient, ps, Δ)`, the reverse pass of every gradient, takes 1.05 s and
   1.07 s here against 0.52 s and 0.50 s on 0.5.0, on a set of 369 leaves of two numbers with a
   cotangent over 100 of them, inside `Base.invokelatest`, two cold processes per tree, Julia 1.13.1,
-  under a load average of about 4. A later call allocates 21 520 bytes on both.
+  under a load average of about 4. A later call allocates 21 520 bytes on both. The figures come
+  from `scripts/map_cotangent_cost.jl`, which is new.
 - **The comments in `src/` and `ext/` describe what the code does, in the present tense.** The
   measurements and the reasons that rest on them move to a new manual page, "Design notes"
   (`docs/src/design.md`), each with the Julia version and the script it was taken with.
@@ -42,9 +43,6 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `_flatten_children!`, `_unflatten_children`, `_unflatten_children!`, `_layout_body`,
   `_storage_component`, `_matching_named`, `_map_cotangent_named`, `_map_cotangent_positional` and
   `_cotangent_get`.
-- **The error of two branches walked together with different keys, or a different number of
-  children, counts the sets and layouts of the walk.** It reads "in set or layout 2 of the walk"
-  where it read "in argument 2", which for `flatten!(v, ps, layout)` named the wrong argument.
 - **`PLAN.md` is deleted.** It was a stale plan, verified on 2026-08-28.
 
 ### Fixed

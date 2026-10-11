@@ -42,6 +42,13 @@ end
     @test_throws ArgumentError mapparameters(+, a, b)
 end
 
+# A downstream test matches this message by substring, so its wording and its count are pinned.
+@testset "a zipped fold names the set whose keys differ ($T)" for T in (Float32, Float64)
+    a = NetworkParameters((L1 = (W = T[1 2; 3 4], b = T[1, 2]),))
+    b = NetworkParameters((L2 = (W = T[1 2; 3 4], b = T[1, 2]),))
+    @test_throws "and, in argument 2," foldparameters((acc, x, y) -> acc + sum(x .* y), zero(T), a, b)
+end
+
 @testset "in-place walks" begin
     dest = NetworkParameters((L = (x = [1.0, 2.0],),))
     src = NetworkParameters((L = (x = [10.0, 20.0],),))

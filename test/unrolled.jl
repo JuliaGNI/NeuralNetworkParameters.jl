@@ -18,6 +18,10 @@ end
     end
 end
 
+@testset "the unrolled map names the set of another width ($T)" for T in (Float32, Float64)
+    @test_throws "and, in argument 2," _unrolled_map(tuple, (T[1], T[2]), (T[1],))
+end
+
 @testset "the unrolled map of an empty branch" begin
     @test _unrolled_map(identity, ()) === ()
     @test _unrolled_map(identity, NamedTuple()) === ()

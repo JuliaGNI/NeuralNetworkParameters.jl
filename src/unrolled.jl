@@ -45,21 +45,21 @@ end
 
 @noinline _arity_error(n::Int, j::Int, m::Int) = throw(ArgumentError(string(
     "parameter sets walked together must have the same number of children at every level; ",
-    "got ", n, " and, in set or layout ", j, " of the walk, ", m, ".")))
+    "got ", n, " and, in argument ", j, ", ", m, ".")))
 
 # The keys of a branch type, or `nothing` for a branch that has none.
 _branch_keys(::Type{<:NamedTuple{Keys}}) where {Keys} = Keys
 _branch_keys(::Type) = nothing
 
 @noinline _child_keys_error(ks, rk, j::Int) = throw(ArgumentError(string(
-    "parameter sets have different keys: ", ks, " and, in set or layout ", j, " of the walk, ", rk)))
+    "parameter sets have different keys: ", ks, " and, in argument ", j, ", ", rk)))
 
 # Child `i` of the further set `j` of type `r`, as an expression: `nothing` for a set that is
 # `nothing`, and `getfield` at a literal index otherwise, after a check of the keys.
 function _child_expr(ks, r::Type, j::Int, i::Int)
     r === Nothing && return :nothing
     rk = _branch_keys(r)
-    # `j + 1`: the message counts the sets and layouts walked together, of which `xs` is the first
+    # `j + 1`: the message counts the parameter sets, of which `xs` is the first
     ks === nothing || rk === nothing || rk === ks || _child_keys_error(ks, rk, j + 1)
     :(getfield(rest[$j], $i))
 end
