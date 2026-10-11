@@ -23,7 +23,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   its storage.** Its structural tangent raises an `ArgumentError`, as before; the docstring gives the
   remedy, a `storage_gradient` method of its own or the blocks in separate fields, and
   `test/derivatives.jl` pins the error.
-- **The first call compiles a little longer on a wide branch.** On a branch of 369 children, Julia
+- **The first call compiles longer on a wide branch, and the first reverse pass about twice as
+  long.** On a branch of 369 children, Julia
   1.13.1, one cold process per row, under a load average of about 5, the first call of
   `parameterlayout` takes 1.03 s here against 0.85 s on 0.5.0, `flatten` 2.08 s against 1.67 s, and
   `unflatten` 15.66 s against 15.41 s. The figures come from

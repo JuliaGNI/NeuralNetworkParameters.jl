@@ -49,7 +49,7 @@ sides. The walks of this package do not annotate `op`, because the boxing is the
 369 children a chain takes 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3, where the
 written-out fold takes 2.11, 0.80 and 0.47 s.
 
-## Two exceptions to the written-out walks
+## Two walks that take another form
 
 **`mapparameters` and `mapstorage` hand a branch wider than 32 children to `Base.map`.** They run once
 per cache or per device move, not per iteration, and their compile time is paid per pair of function
@@ -80,9 +80,9 @@ type tree of the wrapped 369-leaf layout had 1 849 nodes, against 742 without th
 it the two shapes cost the same: 1.05 s wrapped against 1.04 s bare at 369, 3.01 s against 3.07 s at
 768, and 0.84 s against 0.85 s on a 16 × 24 set of 384 leaves. Julia 1.11, 1.12 and 1.13 agree: 1.05,
 1.13 and 1.03 s at 369 wrapped. The whole 369-wrapped path of `parameterlayout`, `flatten` and
-`unflatten` went from 21.90 s to 8.64 s. Julia 1.11 where no other version is named; NNP 0.2.2 for
-the figures with the prototype and NNP 0.2.3 for those without; `scripts/leaf_layout_cost.jl` and
-`scripts/wide_branch_cost.jl`, whose shared row agrees to 0.1 s.
+`unflatten` took 21.90 s with the parameter and 8.64 s without it. Julia 1.11 where no other
+version is named; NNP 0.2.2 for the figures with the prototype and NNP 0.2.3 for those without;
+`scripts/leaf_layout_cost.jl` and `scripts/wide_branch_cost.jl`, whose shared row agrees to 0.1 s.
 
 A leaf is terminal or wrapped by dispatch on the type of its storage. An `===` test in one method
 body gave each leaf layout a three-way union, which inference then carries through every child of a
