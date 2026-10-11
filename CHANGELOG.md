@@ -49,13 +49,12 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 ### Fixed
 
 - **`flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)` pair the children of a named branch
-  with the layout by key.** A set whose keys differ from those of the layout raises an
-  `ArgumentError`, "parameter sets have different keys", at the first branch where they differ. A
-  mismatch at the top level writes nothing; one further down raises after the leaves walked before
-  that branch are written. Before, the two paired
+  with the layout by key.** A set whose keys differ from those of the layout, at any depth, raises an
+  `ArgumentError`, "parameter sets have different keys", before anything is written: `flatten!` leaves
+  `v` as it was, and `unflatten!` leaves every leaf of `ps` as it was. Before, the two paired
   the children by position: a set with the layout's keys in another order had each leaf written into
   another leaf's range, and a set with other key names was copied by position, both with no error.
-  `test/flatten.jl` tests both directions in `Float32` and `Float64`.
+  `test/flatten.jl` tests both directions in `Float32` and `Float64`, at the top level and below it.
 
 ## [0.5.0] — 2026-10-11
 
