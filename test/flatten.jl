@@ -125,7 +125,8 @@ end
 end
 
 # The in-place forms pair a branch with its layout by key, as the in-place walks pair two sets: a set
-# whose keys are in another order raises rather than writing each leaf into another leaf's range.
+# whose keys are in another order, or have other names, raises rather than writing each leaf into
+# another leaf's range or copying by position.
 @testset "key mismatches with the layout are caught" begin
     for T in (Float32, Float64)
         layout = parameterlayout((a = T[1], b = T[2, 3]))
@@ -135,6 +136,13 @@ end
         @test_throws "different keys" unflatten!(crossed, layout, T[1, 2, 3])
         @test v == zeros(T, 3)
         @test crossed == (b = T[5], a = T[6, 7])
+
+        # keys of other names, in a set of the layout's shape
+        renamed = (c = T[5], d = T[6, 7])
+        @test_throws "different keys" flatten!(v, renamed, layout)
+        @test_throws "different keys" unflatten!(renamed, layout, T[1, 2, 3])
+        @test v == zeros(T, 3)
+        @test renamed == (c = T[5], d = T[6, 7])
     end
 end
 

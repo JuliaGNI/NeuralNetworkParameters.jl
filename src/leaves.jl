@@ -141,7 +141,9 @@ method for it rebuilds the leaf with [`rebuild`](@ref) around the components of 
 belong to its storage — matched by key for a `NamedTuple` of blocks, by field name for a `Tuple` of
 blocks, whose i-th block must be the leaf's i-th field, and for one block by the one field it is —
 each converted by this function in turn, with a zero block where the tangent has none. A storage that
-meets none of these raises an `ArgumentError`.
+meets none of these raises an `ArgumentError`. So does a leaf whose one field is a `Tuple` of blocks
+that is its storage: give such a leaf a `storage_gradient` method of its own, or keep its blocks in
+separate fields.
 
 # Extending
 

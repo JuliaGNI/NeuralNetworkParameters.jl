@@ -16,12 +16,13 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `mapparameters!`, `mapstorage!`, `foldparameters`, `foldstorage`, `flatten!`, `unflatten`,
   `unflatten!`, `parameterlayout`, `parameter_eltype`, `map_cotangent`, the hole fill of a gradient
   and the default `storage_gradient` of a structural tangent. `src/` had 15 generated bodies and now
-  has 3. No value changes, and the existing tests pass unchanged apart from comments. The test file
-  `test/unrolled.jl` and a key test in `test/flatten.jl` are new.
-- **`flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)` now pair the children of a named
-  branch by key.** A set whose keys differ from those of the layout raises an `ArgumentError`,
-  "parameter sets have different keys". Before, the two paired the children by position and never
-  compared keys.
+  has 3. No value of a call whose keys agree with the layout changes (see *Fixed* for the other
+  calls), and the existing tests pass unchanged apart from comments. The test file
+  `test/unrolled.jl` is new.
+- **The `storage_gradient` docstring names a leaf whose one field is a `Tuple` of blocks that is
+  its storage.** Its structural tangent raises an `ArgumentError`, as before; the docstring gives the
+  remedy, a `storage_gradient` method of its own or the blocks in separate fields, and
+  `test/derivatives.jl` pins the error.
 - **The first call compiles a little longer on a wide branch.** On a branch of 369 children, Julia
   1.13.1, one cold process per row, under a load average of about 5, the first call of
   `parameterlayout` takes 1.03 s here against 0.85 s on 0.5.0, `flatten` 2.08 s against 1.67 s, and
@@ -37,6 +38,15 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   `_unflatten_children!`, `_layout_body`, `_storage_component`, `_matching_named`,
   `_map_cotangent_named`, `_map_cotangent_positional` and `_cotangent_get`.
 - **`PLAN.md` is deleted.** It was a stale plan, verified on 2026-08-28.
+
+### Fixed
+
+- **`flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)` pair the children of a named branch
+  with the layout by key.** A set whose keys differ from those of the layout raises an
+  `ArgumentError`, "parameter sets have different keys", and writes nothing. Before, the two paired
+  the children by position: a set with the layout's keys in another order had each leaf written into
+  another leaf's range, and a set with other key names was copied by position, both with no error.
+  `test/flatten.jl` tests both directions in `Float32` and `Float64`.
 
 ## [0.5.0] — 2026-10-11
 

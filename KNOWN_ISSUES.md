@@ -28,3 +28,19 @@ fixed; the fix goes in `CHANGELOG.md`.
   21–24 and 29. No design of this package changes it, because the bare `NamedTuple` fails too.
 - kind: upstream
 - found: 2026-10-05
+
+## Defects
+
+### K3 · A storage `NamedTuple` built from one field of the leaf gets a zero gradient
+
+- location: `src/derivatives.jl`, `_storage_cotangent(_, ::NamedTuple, ::NamedTuple)`
+- evidence: a leaf that keeps its blocks in one `Tuple` field `b` and returns them as
+  `freeparameters(s) = (x = s.b[1], y = s.b[2])` gets an all-zero gradient, with no error, for a
+  loss that reads `q.L.b`. The storage keys `x` and `y` are matched against the field names of the
+  structural tangent (`b`), so each block is a hole. The `storage_gradient` docstring says that a
+  storage that is not the leaf's fields raises. `julia --project=. -e 'using TestEnv;
+  TestEnv.activate(); include("scripts/tuple_field_storage.jl")'` prints
+  `NTBox Float32: Float32[0.0, 0.0, 0.0, 0.0]` and `NTBox Float64: [0.0, 0.0, 0.0, 0.0]`, where
+  the gradient is `[1, 1, 2, 2]`. The same holds on 0.5.0 (`17d8356`). A fix changes a value.
+- kind: defect
+- found: 2026-10-11

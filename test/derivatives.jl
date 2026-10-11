@@ -350,6 +350,23 @@ NNP.rebuild(::Thrice, data) = Thrice(data[1], data[2])
     @test_throws ArgumentError storage_gradient(Thrice(T[1, 2], T[3, 4]), Δ)
 end
 
+# A leaf whose one field is a `Tuple` of blocks, which is its storage. Block 1 is not the leaf's first
+# field, so the structural tangent of a loss that reads the field is not supported, and raises
+# rather than matching the blocks by value or matching the whole field as one block.
+struct TupBox{T} <: AbstractVector{T}
+    b::Tuple{Vector{T}, Vector{T}}
+end
+Base.size(::TupBox) = (4,)
+Base.getindex(s::TupBox, i::Int) = i <= 2 ? s.b[1][i] : s.b[2][i - 2]
+NNP.freeparameters(s::TupBox) = s.b
+NNP.rebuild(::TupBox, d) = TupBox(d)
+
+@testset "a leaf whose one field is a tuple of blocks raises on a structural tangent ($T)" for T in (
+    Float32, Float64)
+    tp = NetworkParameters((L = TupBox((T[1, 2], T[3, 4])),))
+    @test_throws ArgumentError Zygote.gradient(q -> sum(q.L.b[1]) + 2sum(q.L.b[2]), tp)
+end
+
 # ---------------------------------------------------------------------------------------------------
 # The loss sees a `NetworkParameters`, and the storage gradient of a structured leaf
 # ---------------------------------------------------------------------------------------------------
