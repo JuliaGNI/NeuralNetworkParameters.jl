@@ -124,6 +124,20 @@ end
     @test_throws DimensionMismatch unflatten!(ps, layout, zeros(3))
 end
 
+# The in-place forms pair a branch with its layout by key, as the in-place walks pair two sets: a set
+# whose keys are in another order raises rather than writing each leaf into another leaf's range.
+@testset "key mismatches with the layout are caught" begin
+    for T in (Float32, Float64)
+        layout = parameterlayout((a = T[1], b = T[2, 3]))
+        crossed = (b = T[5], a = T[6, 7])
+        v = zeros(T, 3)
+        @test_throws "different keys" flatten!(v, crossed, layout)
+        @test_throws "different keys" unflatten!(crossed, layout, T[1, 2, 3])
+        @test v == zeros(T, 3)
+        @test crossed == (b = T[5], a = T[6, 7])
+    end
+end
+
 @testset "an immutable leaf cannot be written in place" begin
     ps = NetworkParameters((a = 1.5,))
     _, layout = flatten(ps)

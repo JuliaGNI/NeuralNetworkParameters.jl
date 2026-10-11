@@ -148,9 +148,7 @@ Base.pairs(p::NetworkParameters) = pairs(params(p))
 # The numeric one is `parameter_eltype(ps)`, and in a signature it is `NetworkParameters{T}`.
 
 # The conversion belongs to this package, since it owns the type. Defining it downstream would be
-# piracy on both counts — `Base`'s constructor and this package's type — which is what
-# GeometricMachineLearning [#207](https://github.com/JuliaGNI/GeometricMachineLearning.jl/pull/207)
-# had to do to write a nested parameter set to HDF5.
+# piracy on both counts — `Base`'s constructor and this package's type.
 Base.NamedTuple(p::NetworkParameters) = params(p)
 
 Base.isequal(p1::NetworkParameters, p2::NetworkParameters) = isequal(params(p1), params(p2))

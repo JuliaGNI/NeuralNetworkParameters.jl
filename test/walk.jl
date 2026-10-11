@@ -101,10 +101,9 @@ end
     @test d == (a = [1.0], b = [2.0])
 end
 
-# A positional branch is the blocks of one multi-block leaf, so it is short — but `_tuple_for` used to
-# fill it against a `nothing` with an `ntuple` over a *runtime* length, which stops being inferable past
-# ten. The generated body splices the `nothing`s in as literals now, so there is no length to be runtime
-# about.
+# A positional branch is the blocks of one multi-block leaf, so it is short — but a walk that filled
+# it against a `nothing` with an `ntuple` over a *runtime* length would stop being inferable past ten.
+# The primitives splice the `nothing`s in as literals, so there is no length to be runtime about.
 @testset "a positional branch of more than ten blocks stays inferable" begin
     blocks = ntuple(i -> [Float64(i)], 12)
     @test only(Base.return_types(foreachparameters,

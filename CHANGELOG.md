@@ -4,6 +4,40 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — targeting 0.5.1
+
+### Changed
+
+- **The walks across the children of one branch share three internal primitives, in the new file
+  `src/unrolled.jl`.** `_unrolled_map`, `_unrolled_foldl` and `_unrolled_mapaccum` are generated
+  bodies, and `_unrolled_foreach` is the map called for its effect. `_unrolled_mapaccum` is a map
+  that carries a state from child to child; `parameterlayout` uses it to carry the offset. Every
+  walk calls one of them, among them `mapparameters`, `mapstorage`, `foreachparameters`,
+  `mapparameters!`, `mapstorage!`, `foldparameters`, `foldstorage`, `flatten!`, `unflatten`,
+  `unflatten!`, `parameterlayout`, `parameter_eltype`, `map_cotangent`, the hole fill of a gradient
+  and the default `storage_gradient` of a structural tangent. `src/` had 15 generated bodies and now
+  has 3. No value changes, and the existing tests pass unchanged apart from comments. The test file
+  `test/unrolled.jl` and a key test in `test/flatten.jl` are new.
+- **`flatten!(v, ps, layout)` and `unflatten!(ps, layout, v)` now pair the children of a named
+  branch by key.** A set whose keys differ from those of the layout raises an `ArgumentError`,
+  "parameter sets have different keys". Before, the two paired the children by position and never
+  compared keys.
+- **The first call compiles a little longer on a wide branch.** On a branch of 369 children, Julia
+  1.13.1, one cold process per row, under a load average of about 5, the first call of
+  `parameterlayout` takes 1.03 s here against 0.85 s on 0.5.0, `flatten` 2.08 s against 1.67 s, and
+  `unflatten` 15.66 s against 15.41 s. The figures come from
+  `scripts/wide_branch_cost.jl --in-process wrapped 369`. The allocations of `parameter_eltype`,
+  `flatten!`, `unflatten!` and `mapparameters!` are zero on both.
+- **The comments in `src/` and `ext/` describe what the code does, in the present tense.** The
+  measurements and the reasons that rest on them move to a new manual page, "Design notes"
+  (`docs/src/design.md`), each with the Julia version and the script it was taken with.
+- **Fourteen internal helpers are removed, none of them public.** They are `_promote_eltypes`,
+  whose fold is now `_unrolled_foldl` with `_join_leaf_eltype`, `_anynothing`, `_foreach_zip`,
+  `_fold_zip`, `_map_zip_written`, `_flatten_children!`, `_unflatten_children`,
+  `_unflatten_children!`, `_layout_body`, `_storage_component`, `_matching_named`,
+  `_map_cotangent_named`, `_map_cotangent_positional` and `_cotangent_get`.
+- **`PLAN.md` is deleted.** It was a stale plan, verified on 2026-08-28.
+
 ## [0.5.0] — 2026-10-11
 
 ### Changed

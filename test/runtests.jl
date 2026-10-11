@@ -6,6 +6,7 @@ if "core" in GROUPS
     @safetestset "Aqua" include("quality/aqua.jl")
     @safetestset "JET" include("quality/jet.jl")
     @safetestset "Parameters" include("parameters.jl")
+    @safetestset "Unrolled primitives" include("unrolled.jl")
     @safetestset "Leaf protocol" include("leaves.jl")
     @safetestset "Tree walks" include("walk.jl")
     @safetestset "Layout" include("layout.jl")

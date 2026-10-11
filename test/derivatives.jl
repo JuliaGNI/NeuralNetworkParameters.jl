@@ -198,8 +198,8 @@ function _structured_leaf_pullback(leaf, Δleaf)
 end
 
 @testset "the pullback does not pay for the fields a structured leaf carries" begin
-    # `_storage_component` asks which of the prototype's fields `freeparameters` handed back and reads
-    # the cotangent's component for it, in one generated body. Asked with a `for` over
+    # `_storage_cotangent` asks which of the prototype's fields `freeparameters` handed back and reads
+    # the cotangent's component for it, in a fold at literal indices. Asked with a `for` over
     # `fieldnames(typeof(prototype))` instead, `getfield` at a runtime `Symbol` comes back as the union
     # of the type's field types, so the comparison was dispatched dynamically once per field — and the
     # reverse pass paid for every field the leaf carried rather than for the one holding its numbers.

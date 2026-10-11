@@ -99,25 +99,15 @@ function flatten!(v::AbstractVector, ps, layout::ParameterLayout)
 end
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
-@inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _flatten_children!(v, ps, l.children)
-@inline _flatten!(v, ps::Tuple, l::TupleLayout) = _flatten_children!(v, ps, l.children)
+@inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
+    Base.Fix1(_flatten!, v), ps, l.children)
+@inline _flatten!(v, ps::Tuple, l::TupleLayout) = _unrolled_foreach(
+    Base.Fix1(_flatten!, v), ps, l.children)
 @inline _flatten!(v, x, l::WrappedLayout) = _flatten!(v, freeparameters(x), l.inner)
 
 @inline function _flatten!(v, x, l::LeafLayout)
     _copy_out!(v, first(l.range), x, length(l.range))
     nothing
-end
-
-# `getfield` and not `values(·)[i]`: taking `values` of a branch first materialises a temporary tuple
-# per branch, which at 64 children is where the last of the allocations were. `getfield(·, i)` reads
-# the child in place and serves a `NamedTuple` and a `Tuple` alike.
-@generated function _flatten_children!(v, xs, ls)
-    n = _children_arity(xs, (ls,))
-    calls = [:(_flatten!(v, getfield(xs, $i), getfield(ls, $i))) for i in 1:n]
-    quote
-        $(calls...)
-        nothing
-    end
 end
 
 @inline _copy_out!(v, doffs::Int, x::AbstractArray, n::Int) = (
@@ -157,16 +147,15 @@ unflatten(layout, [10.0, 20.0, 30.0]).L1.W
 Each leaf is *copied* out of `v` rather than viewed into it, so the leaves are ordinary arrays and
 cannot alias each other or the flat vector.
 """
-# The three branch cases are the same walk whether the flat form is a vector or a Jacobian — they
-# recurse and put the children back in the shape of the branch, and neither step reads an entry. So
-# they are written once over `AbstractVecOrMat`, and only the two leaf cases below are split: a leaf
-# takes its own stretch of a vector and is rebuilt, and takes the corresponding *rows* of a Jacobian
-# and is not.
+# The three branch cases serve a vector and a Jacobian alike, since they read no entry; only the two
+# leaf cases below differ. A leaf takes its own stretch of a vector and is rebuilt, and takes the
+# corresponding *rows* of a Jacobian and is not.
 @inline unflatten(l::ParametersLayout, data::AbstractVecOrMat) = NetworkParameters(
     unflatten(l.inner, data))
-@inline unflatten(l::NestedLayout, data::AbstractVecOrMat) = NamedTuple{keys(l.children)}(_unflatten_children(
-    l.children, data))
-@inline unflatten(l::TupleLayout, data::AbstractVecOrMat) = _unflatten_children(l.children, data)
+@inline unflatten(l::NestedLayout, data::AbstractVecOrMat) = NamedTuple{keys(l.children)}(_unrolled_map(
+    Base.Fix2(unflatten, data), l.children))
+@inline unflatten(l::TupleLayout, data::AbstractVecOrMat) = _unrolled_map(
+    Base.Fix2(unflatten, data), l.children)
 
 @inline unflatten(l::WrappedLayout, v::AbstractVector) = rebuild(l.prototype, unflatten(l.inner, v))
 @inline unflatten(l::LeafLayout, v::AbstractVector) = _reshape_leaf(v[l.range], l.size)
@@ -185,20 +174,6 @@ are *not* rebuilt: a block of a Jacobian is not a parameter, so there is nothing
 """
 @inline unflatten(l::WrappedLayout, J::AbstractMatrix) = unflatten(l.inner, J)
 @inline unflatten(l::LeafLayout, J::AbstractMatrix) = J[l.range, :]
-
-# `unflatten` over the children of a branch layout, written out for the reason the head of `walk.jl`
-# gives rather than written as `map` over a closure.
-#
-# The two are equally inferable, but `map` leaves the closure over `data` to be elided, and past 32
-# children it drops to `Base`'s `Any32` fallback, which returns a tuple with no concrete type. A
-# written-out body leaves no closure to elide and reaches no fallback, at any width.
-#
-# `data` is the flat vector or the Jacobian; which of the two decides the `unflatten` method, so one
-# helper serves both.
-@generated function _unflatten_children(layouts, data)
-    calls = [:(unflatten(getfield(layouts, $i), data)) for i in 1:fieldcount(layouts)]
-    :(($(calls...),))
-end
 
 """
     unflatten!(ps, layout, v)
@@ -222,9 +197,11 @@ function unflatten!(ps, layout::ParameterLayout, v::AbstractVector)
 end
 
 @inline _unflatten!(ps::NetworkParameters, l::ParametersLayout, v) = _unflatten!(params(ps), l.inner, v)
-@inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unflatten_children!(
-    ps, l.children, v)
-@inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unflatten_children!(ps, l.children, v)
+@inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unrolled_foreach(
+    Base.Fix1(_unflatten_from!, v), ps, l.children)
+@inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unrolled_foreach(
+    Base.Fix1(_unflatten_from!, v), ps, l.children)
+@inline _unflatten_from!(v, x, l) = _unflatten!(x, l, v)
 @inline _unflatten!(x, l::WrappedLayout, v) = _unflatten!(freeparameters(x), l.inner, v)
 
 @inline function _unflatten!(x::AbstractArray, l::LeafLayout, v)
@@ -235,13 +212,4 @@ end
 function _unflatten!(x::Number, ::LeafLayout, _)
     throw(ArgumentError(string("cannot write into the immutable leaf `", x,
         "`; use the out-of-place `unflatten` for a parameter set with scalar leaves")))
-end
-
-@generated function _unflatten_children!(xs, ls, v)
-    n = _children_arity(xs, (ls,))
-    calls = [:(_unflatten!(getfield(xs, $i), getfield(ls, $i), v)) for i in 1:n]
-    quote
-        $(calls...)
-        nothing
-    end
 end

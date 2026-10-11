@@ -19,6 +19,7 @@ makedocs(;
         "The leaf protocol" => "protocol.md",
         "Walking a parameter set" => "walks.md",
         "Reading and writing HDF5" => "hdf5.md",
+        "Design notes" => "design.md",
         "Library" => "library.md"
     ]
 )
