@@ -63,21 +63,6 @@ fixed; the fix goes in `CHANGELOG.md`.
 - kind: found late
 - found: 2026-10-11
 
-### K7 · The key and arity messages call the layout of `flatten!` argument 2, where it is argument 3
-
-- location: `src/unrolled.jl`, `_arity_error` and `_child_keys_error`
-- evidence: `flatten!(zeros(3), (c = [5.0], d = [6.0, 7.0]), parameterlayout((a = [1.0], b =
-  [2.0, 3.0])))` raises `ArgumentError: parameter sets have different keys: (:c, :d) and, in
-  argument 2, (:a, :b)`. The messages count the sets and layouts walked together, of which the
-  layout is the second; in `flatten!(v, ps, layout)` it is argument 3. On 0.5.0 (`17d8356`) the
-  arity message of `flatten!` names argument 2 the same way, and the call above raises no error,
-  because 0.5.0 pairs the children with the layout by position. A downstream test of the optimiser
-  package (`test/integration/neural_network_parameters_protocol.jl`) matches
-  `"and, in argument 2,"`, so a new wording needs a change there first. `test/flatten.jl`,
-  `test/walk.jl` and `test/unrolled.jl` pin the wording as it is.
-- kind: defect
-- found: 2026-10-11
-
 ## Tests
 
 ### K5 · Test comments carry history and measurements

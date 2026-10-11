@@ -132,29 +132,36 @@ end
         layout = parameterlayout((a = T[1], b = T[2, 3]))
         crossed = (b = T[5], a = T[6, 7])
         v = zeros(T, 3)
-        @test_throws "different keys" flatten!(v, crossed, layout)
-        @test_throws "different keys" unflatten!(crossed, layout, T[1, 2, 3])
+        @test_throws "differ from the keys of the layout" flatten!(v, crossed, layout)
+        @test_throws "differ from the keys of the layout" unflatten!(crossed, layout, T[1, 2, 3])
         @test v == zeros(T, 3)
         @test crossed == (b = T[5], a = T[6, 7])
 
         # keys of other names, in a set of the layout's shape
         renamed = (c = T[5], d = T[6, 7])
-        @test_throws "different keys" flatten!(v, renamed, layout)
-        @test_throws "different keys" unflatten!(renamed, layout, T[1, 2, 3])
+        @test_throws "differ from the keys of the layout" flatten!(v, renamed, layout)
+        @test_throws "differ from the keys of the layout" unflatten!(renamed, layout, T[1, 2, 3])
         @test v == zeros(T, 3)
         @test renamed == (c = T[5], d = T[6, 7])
 
-        # the message calls the layout argument 2, its place in the walk (KNOWN_ISSUES.md K7)
-        @test_throws "and, in argument 2," flatten!(v, renamed, layout)
+        # the message names the set and the layout, not their places in the walk
+        @test_throws ArgumentError("the keys of the set, (:c, :d), differ from the keys of the layout, (:a, :b)") flatten!(
+            v, renamed, layout)
 
         # a mismatch below the top level raises too, and writes nothing before it
         nested = parameterlayout((a = T[1, 2], b = (c = T[3],)))
         deep = (a = T[5, 6], b = (d = T[7],))
         w = zeros(T, 3)
-        @test_throws "different keys" flatten!(w, deep, nested)
+        @test_throws "differ from the keys of the layout" flatten!(w, deep, nested)
         @test w == zeros(T, 3)
-        @test_throws "different keys" unflatten!(deep, nested, T[1, 2, 3])
+        @test_throws "differ from the keys of the layout" unflatten!(deep, nested, T[1, 2, 3])
         @test deep == (a = T[5, 6], b = (d = T[7],))
+
+        # a `Tuple` branch of another width
+        pair = parameterlayout((T[1], T[2, 3]))
+        @test_throws "a branch of the set has width 1 where the layout has width 2" flatten!(
+            v, (T[5],), pair)
+        @test v == zeros(T, 3)
     end
 end
 

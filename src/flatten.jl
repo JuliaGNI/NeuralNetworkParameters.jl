@@ -99,17 +99,26 @@ function flatten!(v::AbstractVector, ps, layout::ParameterLayout)
     v
 end
 
-# The keys of `ps` against those of the layout at every branch, before the first write, so that a
-# mismatch writes nothing. The primitives compare the keys as they are generated, so at run time
-# this walk only reads the storage of each wrapped leaf.
+# The keys of `ps` against those of the layout at every branch, and the widths of a `Tuple` branch,
+# before the first write, so that a mismatch writes nothing. Dispatch compares them, so at run time
+# this walk only reads the storage of each wrapped leaf. A mismatch names the set and the layout,
+# which are arguments 2 and 3 of `flatten!` and arguments 1 and 2 of `unflatten!`.
 @inline _check_layout_keys(ps::NetworkParameters, l::ParametersLayout) = _check_layout_keys(
     params(ps), l.inner)
-@inline _check_layout_keys(ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
-    _check_layout_keys, ps, l.children)
-@inline _check_layout_keys(ps::Tuple, l::TupleLayout) = _unrolled_foreach(
-    _check_layout_keys, ps, l.children)
+@inline function _check_layout_keys(ps::NamedTuple{Keys}, l::NestedLayout{Keys}) where {Keys}
+    _unrolled_foreach(_check_layout_keys, ps, l.children)
+end
+@inline function _check_layout_keys(
+        ps::NTuple{N, Any}, l::TupleLayout{<:NTuple{N, Any}}) where {N}
+    _unrolled_foreach(_check_layout_keys, ps, l.children)
+end
 @inline _check_layout_keys(x, l::WrappedLayout) = _check_layout_keys(freeparameters(x), l.inner)
 @inline _check_layout_keys(_, _) = nothing
+
+@noinline _check_layout_keys(ps::NamedTuple, l::NestedLayout) = throw(ArgumentError(string(
+    "the keys of the set, ", keys(ps), ", differ from the keys of the layout, ", keys(l.children))))
+@noinline _check_layout_keys(ps::Tuple, l::TupleLayout) = throw(ArgumentError(string(
+    "a branch of the set has width ", length(ps), " where the layout has width ", length(l.children))))
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
 @inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
