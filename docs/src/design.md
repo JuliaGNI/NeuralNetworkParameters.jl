@@ -25,10 +25,11 @@ primitive passes one child of each set, and `Base.Fix1` takes only one further a
 1.11.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`
-children costs `k` specialisations whose argument types are each `O(k)` long. `flatten` on a flat set
-took 0.17 s at 32 children, 2.2 s at 64, 17.6 s at 128, and more than ten minutes at 369. Without
-`@inline` the chain took 3.2 s at 64 and allocated 187 808 bytes. Julia 1.11, before NNP 0.2.2,
-`scripts/wide_branch_cost.jl`.
+children costs `k` specialisations whose argument types are each `O(k)` long. The 0.2.2 entry of
+`CHANGELOG.md` gives the cold first-call times of the chain of NNP 0.2.1 against the written-out
+walks, on Julia 1.11.9 and 1.13, from `scripts/wide_branch_cost.jl`. Without `@inline` the chain is
+slower still, and it allocates, because the chain is what kept the per-leaf `copyto!` statically
+dispatched.
 
 **Why not a loop over `keys`.** A loop indexes a heterogeneous tuple at a runtime index, which is not
 type stable, and costs a dynamic dispatch and an allocation per child.
@@ -79,8 +80,9 @@ type tree of the wrapped 369-leaf layout had 1 849 nodes, against 742 without th
 it the two shapes cost the same: 1.05 s wrapped against 1.04 s bare at 369, 3.01 s against 3.07 s at
 768, and 0.84 s against 0.85 s on a 16 × 24 set of 384 leaves. Julia 1.11, 1.12 and 1.13 agree: 1.05,
 1.13 and 1.03 s at 369 wrapped. The whole 369-wrapped path of `parameterlayout`, `flatten` and
-`unflatten` went from 21.90 s to 8.64 s. Julia 1.11 where no other version is named, NNP 0.2.3,
-`scripts/leaf_layout_cost.jl` and `scripts/wide_branch_cost.jl`, whose shared row agrees to 0.1 s.
+`unflatten` went from 21.90 s to 8.64 s. Julia 1.11 where no other version is named; NNP 0.2.2 for
+the figures with the prototype and NNP 0.2.3 for those without; `scripts/leaf_layout_cost.jl` and
+`scripts/wide_branch_cost.jl`, whose shared row agrees to 0.1 s.
 
 A leaf is terminal or wrapped by dispatch on the type of its storage. An `===` test in one method
 body gave each leaf layout a three-way union, which inference then carries through every child of a
