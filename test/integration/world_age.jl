@@ -1,13 +1,10 @@
 # The generated walks still work when the sources are evaluated rather than loaded from a cache.
 #
-# Every across-children walk is a `@generated` function, and four of them call `_children_arity` from
-# the *generator* body — as does, for a walk over more than one set, the chain of `_branch_keys`,
-# `_child_expr` and their two error helpers. `_layout`'s two branch cases reach `_layout_body`, which
-# builds the body both of them share, on the same terms. A generator runs in the world age of its own
-# method definition, so a helper defined further down the file is invisible to it and the generator
-# raises `MethodError: no method matching _children_arity(…)  The applicable method may be too new`.
-# That is a real defect and it was one: `_children_arity` used to sit at the foot of `src/walk.jl`,
-# below `_map_zip` and `_foreach_zip`.
+# Every across-children walk is one of the three generated primitives of `src/unrolled.jl`, whose
+# generators call `_children_arity`, `_child_args`, `_branch_keys`, `_child_expr` and their two error
+# helpers. A generator runs in the world age of its own method definition, so a helper defined further
+# down the file is invisible to it and the generator raises `MethodError: no method matching
+# _children_arity(…)  The applicable method may be too new`.
 #
 # It cannot be caught in-process. Loading a precompiled package deserialises every method in the
 # module into one world age, which is exactly the condition that hides it — so the whole of the rest
@@ -15,18 +12,18 @@
 # and a subprocess is the only way to ask for it.
 #
 # Cheap enough to keep: the package's dependency is `ChainRulesCore`, so a from-source load is about a
-# second. The walks exercised below are the five whose generators call `_children_arity` — `_map_zip`,
-# `_foreach_zip`, `_fold_zip` and, through `flatten`, `_flatten_children!` and `_unflatten_children!`.
-# `_foreach_zip` and `_fold_zip` are run at **two** arities, because the key and index helpers a
-# further set needs are only reached at the second — one set has no second set to pair against, so an
-# arity-one walk would leave exactly that chain of helpers untried.
+# second. The walks below reach every primitive: `_unrolled_map` through `mapparameters`, `unflatten`
+# and the `foreach` walks, `_unrolled_foldl` through the folds and `parameter_eltype`, and
+# `_unrolled_mapaccum` through `parameterlayout`. The walks run at **two** arities, because the key
+# and index helpers a further set needs are only reached at the second — one set has no second set to
+# pair against, so an arity-one walk would leave exactly that chain of helpers untried.
 #
-# For the same reason the file ends with three walks that are *wrong*. `_arity_error`,
-# `_child_keys_error` and `_no_folded_skip_error` are reached from a generator only when a caller has
-# mismatched something, so every successful walk above leaves all three untried — and each could be
-# moved below its caller with this file still passing. What a misplaced one produces is a `MethodError`
-# saying the method "may be too new" in place of the `ArgumentError` the caller is owed, so the error
-# *type* is the assertion and not merely that something was thrown.
+# For the same reason the file ends with three walks that are *wrong*. `_arity_error` and
+# `_child_keys_error` are reached from a generator only when a caller has mismatched something, so
+# every successful walk above leaves both untried — and each could be moved below its caller with this
+# file still passing. What a misplaced one produces is a `MethodError` saying the method "may be too
+# new" in place of the `ArgumentError` the caller is owed, so the error *type* is the assertion and
+# not merely that something was thrown. The third, `_no_folded_skip_error`, is raised at run time.
 
 using Test
 
@@ -35,17 +32,17 @@ using NeuralNetworkParameters
 
 ps = (L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],))
 
-# `_map_zip`
+# `_unrolled_map`
 mapparameters(zero, ps) == (L1 = (W = [0.0 0.0], b = [0.0]), L2 = (W = [0.0;;],)) || exit(1)
 mapparameters(+, ps, ps).L1.b == [6.0] || exit(2)
 
-# `_foreach_zip` at arity one
+# `_unrolled_foreach`, which is `_unrolled_map`, at arity one
 let n = Ref(0)
     foreachparameters(_ -> n[] += 1, ps)
     n[] == 3 || exit(3)
 end
 
-# `_foreach_zip` at arity two, which is what reaches `_branch_keys` and `_child_expr` from a generator
+# and at arity two, which is what reaches `_branch_keys` and `_child_expr` from a generator
 let dest = mapparameters(zero, ps)
     mapparameters!(copyto!, dest, ps)
     dest == ps || exit(8)
@@ -57,8 +54,8 @@ let n = Ref(0)
     n[] == 0 || exit(9)
 end
 
-# `_flatten_children!`, `_unflatten_children`, `_unflatten_children!`, `_layout` and the
-# `_layout_body` its generators share, `_promote_eltypes`
+# `_unrolled_mapaccum` through `parameterlayout`, `_unrolled_foldl` through `parameter_eltype`, and
+# `_unrolled_map` through `flatten!`, `unflatten` and `unflatten!`
 v, layout = flatten(ps)
 v == [1.0, 2.0, 3.0, 4.0] || exit(4)
 unflatten(layout, v) == ps || exit(5)
@@ -67,16 +64,16 @@ let qs = mapparameters(zero, ps)
     qs == ps || exit(6)
 end
 
-# and `_layout_body`'s empty-branch arm, which is the one `wrap` call the walk above does not make
+# and the empty branch, for which each primitive writes a body with no child
 flatten((L1 = NamedTuple(), L2 = (W = [1.0],), L3 = (t = (),)))[1] == [1.0] || exit(15)
 
-# `_fold_zip` at arity one, and at the arity that reaches `_branch_keys` and `_child_expr` from the
-# fold's own generator; `foldstorage` is its other `_fold_step`
+# `_unrolled_foldl` at arity one, and at the arity that reaches `_branch_keys` and `_child_expr`
+# from the fold's own generator, through both folds
 foldparameters((a, x) -> a + length(x), 0, ps) == 4 || exit(7)
 foldparameters((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(10)
 foldstorage((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(11)
 
-# The three error helpers, each reached from a generator and none of them by a walk that succeeds
+# The three error helpers, none of them reached by a walk that succeeds
 raises_argument_error(f) = try
     f()
     false

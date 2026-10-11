@@ -124,126 +124,33 @@ layout = parameterlayout(ps)
 """
 parameterlayout(ps) = first(_layout(ps, 0))
 
-# The container case: the child walk, and then a step that wraps what it returns.
-#
-# Until 0.2.3 this was the expensive shape on Julia 1.11, and the cost was read as a cost of the
-# composition itself — a `@generated` body yielding a large type, composed across a function call with
-# a step that wraps it. It was not. `parameterlayout` on a flat 369-leaf set cost 1.35 s as a bare
-# `NamedTuple` and **13.40 s** inside a `NetworkParameters`; at 768 leaves, 2.77 s against **87.77 s**.
-# The cause was [`LeafLayout`](@ref)'s `prototype` type parameter, which put each leaf's concrete array
-# type into the layout type of every branch above it — 1849 nodes in the type tree of a 369-leaf
-# wrapped layout, against 742 without it. This method is where a caller paid for that, because it
-# infers through the child walk's whole return type to reach `ParametersLayout(inner)`, and inference
-# on such a type grows faster than the type does: 2.5 times the type was 13 times the time.
-#
-# With the parameter gone the two shapes cost the same — 1.05 s wrapped against 1.04 s bare at 369,
-# 3.01 s against 3.07 s at 768, 0.84 s against 0.85 s on a 16 × 24 set of the same 384 leaves — and so
-# do the three supported Julia versions: 1.05 s on 1.11, 1.13 s on 1.12, 1.03 s on 1.13, at 369 wrapped,
-# where the compat floor used to be the one that behaved differently. Nesting was never the driver and
-# is not one now, at 384 leaves in 16 branches against 369 in one.
-#
-# So there is nothing left here to move, and fusing the two steps into one `@generated` body — which
-# the note this replaces measured, and declined — answers a question that no longer arises.
-#
-# What survives is where to look rather than what to change. **The total is what a consumer compiles,
-# and it does not depend on which method holds it.** On 0.2.2 the bare and wrapped paths split their
-# cost completely differently and still summed to nearly the same figure: 1.35 + 14.38 + 4.23 s bare
-# against 13.50 + 4.14 + 4.26 s wrapped, over `parameterlayout`, `flatten` and `unflatten`. Moving a
-# second out of one entry point puts it into another; taking the type parameter out took the whole
-# 369-wrapped path from 21.90 s to **8.64 s**.
-#
-# The six shape-against-shape figures are `scripts/leaf_layout_cost.jl` and the three-column splits are
-# `scripts/wide_branch_cost.jl`, one process per row in both. The two agree on the 369-wrapped row they
-# share to within a tenth of a second, 13.40 s against 13.50 s, which is the spread to read the rest at.
+# `_layout(x, offset)` returns the layout of `x` placed after `offset` entries, and the offset past
+# its last entry.
 function _layout(ps::NetworkParameters, offset::Int)
     inner, off = _layout(params(ps), offset)
     ParametersLayout(inner), off
 end
 
-# The two branch cases, each **one** `@generated` body that lays the children out *and* builds the
-# layout around them.
-#
-# Splitting those two steps is what this used to do, and it is the expensive way round. A generated
-# body that returns a `k`-element tuple is cheap on its own — 1.27 s at 369 children — and so is
-# wrapping a tuple you already hold in a `NamedTuple` and a struct — 0.13 s. Composing them across a
-# function call is neither: inference has to carry the whole 369-element tuple type from the callee
-# into the caller's own inference, and `parameterlayout` on that set cost **11.7 s**, of which
-# the child walk alone was 0.49 s of it and the wrapping was the rest. Fused into one body, with the
-# leaf union below removed and (since 0.2.3) the leaf's array type out of its layout type, it is
-# **1.04 s**.
-#
-# The container case above is that same composition, and it is left standing. The note there says why:
-# what made it expensive was not the composition.
-#
-# Measured every way round before settling on this. A `@noinline` barrier on the child walk does not
-# help (11.78 s). Neither does supplying `NestedLayout`'s type parameters instead of letting them be
-# solved. And computing the child lengths first so that the children could be laid out *independently*
-# — the obvious way to break the serial offset dependency — is **worse**, 15.4 s, because it adds two
-# more `k`-long bodies to pay for; the serial dependency was never the cost, as an "every child at the
-# same offset" control shows at 1.17 s against the real walk's 1.27 s.
-#
-# The offset threads left to right, as the recursion this replaces did: the ranges a layout hands out
-# are the order `flatten` writes in.
-# Both generators emit the same body and differ only in what is wrapped round the children, so the
-# body is built once here and each of them says only that. `wrap` receives the expression holding the
-# `k` children and the symbol holding the offset past the last of them, and returns the layout
-# expression. It runs in the generator, so the code that reaches the compiler is what it was when the
-# two bodies were written out in full — the head of this file's argument about fusing the child walk
-# and the wrapping into one generated body is untouched, since both still happen in one.
-#
-# The empty branch takes `offset` as its own final offset, which is what makes its range the empty
-# `(offset + 1):offset`.
-#
-# **A helper called from a generator, so it has to be defined above both of them** — see the note in
-# `walk.jl` on world age, which `test/integration/world_age.jl` pins.
-function _layout_body(n::Int, wrap)
-    n == 0 && return :(($(wrap(:(()), :offset)), offset))
-    body = [:((child_1, off_1) = _layout(getfield(ps, 1), offset))]
-    for i in 2:n
-        push!(body,
-            :(($(Symbol(:child_, i)), $(Symbol(:off_, i))) = _layout(
-                getfield(ps, $i), $(Symbol(:off_, i - 1)))))
-    end
-    children = Expr(:tuple, (Symbol(:child_, i) for i in 1:n)...)
-    final = Symbol(:off_, n)
-    quote
-        $(body...)
-        $(wrap(children, final)), $final
-    end
+# A branch: a map over the children that carries the offset, so the ranges are in the order
+# `flatten` writes. An empty branch has the empty range `(offset + 1):offset`.
+function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
+    children, off = _layout_children(ps, offset)
+    NestedLayout(NamedTuple{Keys}(children), (offset + 1):off), off
 end
 
-@generated function _layout(ps::NamedTuple{Keys}, offset::Int) where {Keys}
-    _layout_body(length(Keys),
-        (cs, final) -> :(NestedLayout(NamedTuple{$Keys}($cs), (offset + 1):($final))))
+function _layout(ps::Tuple, offset::Int)
+    children, off = _layout_children(ps, offset)
+    TupleLayout(children, (offset + 1):off), off
 end
 
-@generated function _layout(ps::Tuple, offset::Int)
-    _layout_body(fieldcount(ps), (cs, final) -> :(TupleLayout($cs, (offset + 1):($final))))
-end
+# Each child laid out after the one before it, and the offset past the last of them.
+_layout_children(ps, offset::Int) = _unrolled_mapaccum(_layout_after, offset, ps)
 
-# A leaf, terminal or wrapped, decided by **dispatch on the storage's type** rather than by an `if`
-# on `freeparameters(x) === x`.
-#
-# The identity test is the right *question* — it is what `isterminal` asks — and asking it inside one
-# method body was measurably the wrong way to ask it. Inference could not fold the branch, so
-# `_layout` on a plain `Matrix{Float32}` came back as a **three-way union**: a `LeafLayout`, and two
-# shapes of `WrappedLayout`. One union per child is survivable; a branch of 369 children each of a
-# three-way union is not, and it is what made `parameterlayout` cost 11.7 s on the flat parameter set
-# of GMLDatasets' MNIST transformer.
-#
-# Splitting on `::T`/`::T` puts the question to the method table, where it is answered once per leaf
-# type at compile time. Keeping the `===` *inside* the same-type method does not work and was tried:
-# inference cannot prove that two arguments are the same object, so the union came straight back. The
-# identity has to be decided by dispatch or not at all.
-#
-# What that gives up is a leaf whose `freeparameters` returns a *distinct object of its own type*,
-# which this now treats as terminal where the `===` would have wrapped it. Nothing is lost, because
-# such a type never worked: `_layout` would descend into the storage, ask it for *its*
-# `freeparameters`, and recurse without end unless it eventually changed type. A leaf either hands
-# back itself or hands back something else.
-#
-# [`isterminal`](@ref) still asks the identity question, and is still right to — it is a predicate a
-# caller evaluates on a value it holds, not a dispatch this has to infer through.
+@inline _layout_after(offset::Int, x) = _layout(x, offset)
+
+# A leaf is terminal or wrapped by dispatch on the type of its storage: a storage of the leaf's own
+# type is the leaf, so its numbers are copied straight out of it. An `===` test in one method body
+# would give each leaf layout a union type, which inference cannot fold.
 @inline _layout(x, offset::Int) = _layout_storage(x, freeparameters(x), offset)
 
 # same type: terminal, the numbers are copied straight out of `x`
@@ -275,11 +182,6 @@ the parameter count of a *model*, and the two would collide on `using`.
 
 This returns an `Int`, so nothing downstream of the call depends on the layout's type. Anything that
 wants only the size should call it; anything that has to unflatten later needs the layout and cannot.
-
-That used to be a large difference in compile time as well — on Julia 1.11, 1.26 s here against 13.20 s
-through [`parameterlayout`](@ref) on a 369-leaf `NetworkParameters`. It is not one any more: 0.2.3 took
-that set to 1.05 s through `parameterlayout` against 1.03 s here. The reason to prefer this is the type
-it hands back, not the clock.
 """
 flatlength(ps) = length(parameterlayout(ps))
 flatlength(l::ParameterLayout) = length(l)

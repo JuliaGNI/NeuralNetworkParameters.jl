@@ -134,8 +134,8 @@ end
 # A leaf whose storage has a *different* element type from the interface it presents: an
 # `AbstractMatrix{Float64}` over a `Vector{Float32}`. Contrived — every structured type in the
 # ecosystem stores what it presents — and pinned all the same, because it is the case that separates
-# following `freeparameters` from reading the leaf's type. Deciding the element type in
-# `_promote_eltypes`' generator by settling an `AbstractArray` child with `eltype`, as issue #22
+# following `freeparameters` from reading the leaf's type. Deciding the element type of a branch from
+# the types of its children, settling an `AbstractArray` child with `eltype`, as issue #22
 # proposes, reports `Float64` here and flattens these three numbers into a vector twice as wide.
 struct Widened{T} <: AbstractMatrix{T}
     S::Vector{Float32}

@@ -90,8 +90,15 @@ end
 _cotangent_backing(Δ::ChainRulesCore.Tangent) = ChainRulesCore.backing(Δ)
 _cotangent_backing(Δ) = Δ
 
-# Anything the cotangent is silent about becomes `nothing`, i.e. a structural zero.
-_cotangent_get(nt::NamedTuple, k::Symbol) = haskey(nt, k) ? nt[k] : nothing
+# The components of the cotangent `nt` at the keys of the first argument, as a `NamedTuple` with those
+# keys. A key the cotangent is silent about is `nothing`, i.e. a structural zero.
+function _cotangents_at(::NamedTuple{Keys}, nt::NamedTuple) where {Keys}
+    holes = NamedTuple{Keys}(ntuple(_ -> nothing, Val(length(Keys))))
+    NamedTuple{Keys}(merge(holes, nt))
+end
+
+# The fields of a struct, as a `NamedTuple`.
+_fields(x) = NamedTuple{fieldnames(typeof(x))}(_unrolled_map(identity, x))
 
 # ---------------------------------------------------------------------------------------------------
 # The storage gradient from a structural tangent
@@ -111,43 +118,39 @@ end
 
 # Storage in several blocks is matched to the tangent by key, for a `NamedTuple` of blocks, and by
 # field name, for a `Tuple` of blocks. A block the tangent leaves out is a structural zero.
-function _storage_cotangent(_, storage::NamedTuple, nt::NamedTuple)
-    NamedTuple{keys(storage)}(_matching_named(storage, nt))
-end
+_storage_cotangent(_, storage::NamedTuple, nt::NamedTuple) = _cotangents_at(storage, nt)
 
 # Block i of a `Tuple` storage is the leaf's i-th field, and takes the component of that field's name.
 # The match is by name and not by value, because a number block is `===` to every equal number.
-@generated function _storage_cotangent(leaf, storage::Tuple, nt::NamedTuple)
-    names = fieldnames(leaf)
-    fieldcount(storage) ≤ length(names) || return :(_no_storage_field_error(leaf, nt))
-    blocks = [:(getfield(leaf, $i) === getfield(storage, $i) ?
-                _cotangent_get(nt, $(QuoteNode(names[i]))) :
-                _no_storage_field_error(leaf, nt))
-              for i in 1:fieldcount(storage)]
-    :(($(blocks...),))
+function _storage_cotangent(leaf, storage::Tuple{Vararg{Any, N}}, nt::NamedTuple) where {N}
+    fields = _fields(leaf)
+    N ≤ length(fields) || _no_storage_field_error(leaf, nt)
+    all(ntuple(i -> fields[i] === storage[i], Val(N))) || _no_storage_field_error(leaf, nt)
+    Δ = _cotangents_at(fields, nt)
+    ntuple(i -> Δ[i], Val(N))
 end
 
-# Storage in one block is one of the leaf's fields, `(S = …, n = …)` for a leaf whose storage is its `S`.
-_storage_cotangent(leaf, storage, nt::NamedTuple) = _storage_component(leaf, storage, nt)
-
-# The one field of the prototype that the storage is, and the component of the cotangent that belongs
-# to it, in one generated body: the field names and the keys are literals on every arm, so neither the
-# `getfield` nor the `haskey` is a runtime question. A storage that is `===` to two fields raises, as
-# one that is none of them does.
-@generated function _storage_component(prototype, storage, nt)
-    names = fieldnames(prototype)
-    found = [Symbol(:found, i) for i in eachindex(names)]
-    tests = [:($(found[i]) = getfield(prototype, $i) === storage) for i in eachindex(names)]
-    expr = :(_no_storage_field_error(prototype, nt))
-    for i in reverse(eachindex(names))
-        expr = :($(found[i]) ? _cotangent_get(nt, $(QuoteNode(names[i]))) : $expr)
-    end
-    quote
-        $(tests...)
-        count(($(found...),)) ≤ 1 || _no_storage_field_error(prototype, nt)
-        $expr
-    end
+# Storage in one block is the one field of the leaf that it is `===` to, `(S = …, n = …)` for a leaf
+# whose storage is its `S`. A storage that is `===` to two fields raises, as one that is none of them
+# does.
+function _storage_cotangent(leaf, storage, nt::NamedTuple)
+    fields = _fields(leaf)
+    match = _unrolled_foldl((m, f, Δf) -> _match_field(m, f, Δf, storage),
+        _NoField(), fields, _cotangents_at(fields, nt))
+    match isa _Field ? match.Δ : _no_storage_field_error(leaf, nt)
 end
+
+# The search for the field that the storage is. A field of another type than the storage cannot be
+# `===` to it, so dispatch leaves it out and the result is inferred.
+struct _NoField end
+struct _TwoFields end
+struct _Field{D}
+    Δ::D
+end
+_match_field(m, f::T, Δf, storage::T) where {T} = f === storage ? _matched(m, Δf) : m
+_match_field(m, _, _, _) = m
+_matched(::_NoField, Δf) = _Field(Δf)
+_matched(_, _) = _TwoFields()
 
 @noinline function _no_storage_field_error(prototype, nt)
     throw(ArgumentError(string(
@@ -156,16 +159,12 @@ end
         "whose i-th block is its i-th field.")))
 end
 
-@generated function _matching_named(storage::NamedTuple{Keys}, nt) where {Keys}
-    :(($((:(_cotangent_get(nt, $(QuoteNode(k)))) for k in Keys)...),))
-end
-
 # ---------------------------------------------------------------------------------------------------
 # A cotangent tree, leaf by leaf against the parameters
 #
 # The callers in this package run once per reverse pass: the reverse rule of `unflatten` and the
 # `ZygoteRules` extension with `storage_gradient`, and `ProjectTo(::NetworkParameters)` with each
-# leaf's projection. The named walk is written out for the reason the head of `walk.jl` gives.
+# leaf's projection.
 # ---------------------------------------------------------------------------------------------------
 
 """
@@ -215,8 +214,8 @@ function map_cotangent(f::F, x, Δ) where {F}
     Δ === nothing ? nothing : _fill_holes(_map_cotangent(f, x, Δ))
 end
 
-# A child of a branch: a hole there is a `_Hole` at each leaf, or a branch of them, until the walk is
-# done and the element type of the gradient is known.
+# A child of a branch: a hole there is a `_Hole` at each leaf, or a branch of them. `_fill_holes`
+# makes each a zero leaf at the end of the walk, when the element type of the gradient is known.
 function _map_child(f::F, x, Δ) where {F}
     Δ = _normalized_for(x, Δ)
     Δ === nothing ? mapparameters(_hole, x) : _map_cotangent(f, x, Δ)
@@ -232,19 +231,15 @@ struct _Hole{X}
 end
 
 # A hole becomes a zero leaf in the element type `S` of the leaves around it, or, where they hold no
-# numbers, in the leaf's own gradient element type. The named walk is written out for the reason the
-# head of `walk.jl` gives.
+# numbers, in the leaf's own gradient element type.
 _fill_holes(g) = _filled(parameter_eltype(g), g)
 
 function _filled(::Type{S}, g::NetworkParameters) where {S}
     NetworkParameters(_filled(S, params(g)))
 end
-@generated function _filled(::Type{S}, g::NamedTuple{Keys}) where {S, Keys}
-    :(NamedTuple{Keys}(($((:(_filled(S, getfield(g, $i))) for i in eachindex(Keys))...),)))
+function _filled(::Type{S}, g::Union{NamedTuple, Tuple}) where {S}
+    _rewrap_children(g, _unrolled_map(Base.Fix1(_filled, S), g))
 end
-@inline _filled(::Type, ::Tuple{}) = ()
-@inline _filled(::Type{S}, g::Tuple) where {S} = (
-    _filled(S, first(g)), _filled(S, Base.tail(g))...)
 _filled(::Type, y) = y
 function _filled(::Type{S}, h::_Hole) where {S}
     T = S === Union{} ? _gradient_eltype(parameter_eltype(h.leaf)) : S
@@ -265,12 +260,14 @@ function _normalized_for(::NetworkParameters, Δ)
     p === nothing ? nothing : (params = p,)
 end
 
-function _map_cotangent(f::F, x::NamedTuple, Δ) where {F}
-    _map_cotangent_named(f, x, _checked_branch(x, _cotangent_backing(Δ)))
+function _map_cotangent(f::F, x::NamedTuple{Keys}, Δ) where {F, Keys}
+    Δx = _cotangents_at(x, _checked_branch(x, _cotangent_backing(Δ)))
+    NamedTuple{Keys}(_unrolled_map(_FixFirst(_map_child, f), x, Δx))
 end
 
+# The cotangent of a `Tuple` branch has its length, which `_checked_branch` has asked.
 function _map_cotangent(f::F, x::Tuple, Δ) where {F}
-    _map_cotangent_positional(f, x, _checked_branch(x, _cotangent_backing(Δ)))
+    _unrolled_map(_FixFirst(_map_child, f), x, _checked_branch(x, _cotangent_backing(Δ)))
 end
 
 # A set, the one a loss differentiates or one inside it: its gradient is a set too. Zygote hands its
@@ -306,18 +303,6 @@ function _shape_error(branch, cotangent)
 end
 _type_of(Δ) = "of type `$(typeof(Δ))`"
 _positions(x::Tuple) = length(x) == 1 ? "with 1 position" : "with $(length(x)) positions"
-
-@generated function _map_cotangent_named(f, x::NamedTuple{Keys}, Δ) where {Keys}
-    children = [:(_map_child(f, getfield(x, $i), _cotangent_get(Δ, $(QuoteNode(Keys[i])))))
-                for i in eachindex(Keys)]
-    :(NamedTuple{Keys}(($(children...),)))
-end
-
-# The cotangent of a `Tuple` branch has its length, which `_checked_branch` has asked.
-@inline _map_cotangent_positional(f, ::Tuple{}, ::Tuple{}) = ()
-@inline _map_cotangent_positional(f, xs::Tuple, Δ::Tuple) = (
-    _map_child(f, first(xs), first(Δ)),
-    _map_cotangent_positional(f, Base.tail(xs), Base.tail(Δ))...)
 
 # `Zygote.gradient` projects its result with `ProjectTo` of the argument. For a `NetworkParameters` that
 # is the projection of each leaf, as it is for the `NamedTuple` inside: a leaf read twice gets a dense

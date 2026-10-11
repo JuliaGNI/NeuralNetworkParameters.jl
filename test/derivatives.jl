@@ -198,8 +198,8 @@ function _structured_leaf_pullback(leaf, Δleaf)
 end
 
 @testset "the pullback does not pay for the fields a structured leaf carries" begin
-    # `_storage_component` asks which of the prototype's fields `freeparameters` handed back and reads
-    # the cotangent's component for it, in one generated body. Asked with a `for` over
+    # `_storage_cotangent` asks which of the prototype's fields `freeparameters` handed back and reads
+    # the cotangent's component for it, in a fold at literal indices. Asked with a `for` over
     # `fieldnames(typeof(prototype))` instead, `getfield` at a runtime `Symbol` comes back as the union
     # of the type's field types, so the comparison was dispatched dynamically once per field — and the
     # reverse pass paid for every field the leaf carried rather than for the one holding its numbers.
@@ -323,8 +323,8 @@ end
     @test (g.x, g.y) == (T(2), T(5))
 end
 
-# A leaf whose tuple storage holds its fields in the other order, and one whose tuple storage has
-# more blocks than the leaf has fields.
+# A leaf whose tuple storage holds its fields in the other order, one whose tuple storage has
+# more blocks than the leaf has fields, and one whose second block is its first field again.
 struct Swap{T} <: AbstractVector{T}
     x::Vector{T}
     y::Vector{T}
@@ -343,11 +343,57 @@ Base.getindex(s::Thrice, i::Int) = vcat(s.x, s.y, s.x)[i]
 NNP.freeparameters(s::Thrice) = (s.x, s.y, s.x)
 NNP.rebuild(::Thrice, data) = Thrice(data[1], data[2])
 
+struct Dup{T} <: AbstractVector{T}
+    x::Vector{T}
+    y::Vector{T}
+end
+Base.size(s::Dup) = (2 * length(s.x),)
+Base.getindex(s::Dup, i::Int) = vcat(s.x, s.x)[i]
+NNP.freeparameters(s::Dup) = (s.x, s.x)
+NNP.rebuild(s::Dup, data) = Dup(data[1], s.y)
+
 @testset "a tuple storage that is not the leaf's fields in order raises ($T)" for T in (
     Float32, Float64)
     Δ = (x = T[1, 1], y = T[2, 2])
     @test_throws ArgumentError storage_gradient(Swap(T[1, 2], T[3, 4]), Δ)
     @test_throws ArgumentError storage_gradient(Thrice(T[1, 2], T[3, 4]), Δ)
+    @test_throws ArgumentError storage_gradient(Dup(T[1, 2], T[3, 4]), Δ)
+end
+
+# A leaf whose other field holds a copy of its storage. The storage is the field it is `===` to, and
+# not a field equal to it in value.
+struct WithCopy{T} <: AbstractVector{T}
+    reference::Vector{T}
+    S::Vector{T}
+end
+Base.size(x::WithCopy) = size(x.S)
+Base.getindex(x::WithCopy, i::Int) = x.S[i]
+NNP.freeparameters(x::WithCopy) = x.S
+NNP.rebuild(x::WithCopy, d) = WithCopy(x.reference, d)
+
+@testset "a field equal in value to the storage is not the storage ($T)" for T in (
+    Float32, Float64)
+    ps = NetworkParameters((L = WithCopy(T[3, 4], T[3, 4]),))
+    g = only(Zygote.gradient(p -> sum(abs2, p.L.S), ps))
+    @test g.L isa WithCopy{T}
+    @test NNP.freeparameters(g.L) == T[6, 8]
+end
+
+# A leaf whose one field is a `Tuple` of blocks, which is its storage. Block 1 is not the leaf's first
+# field, so the structural tangent of a loss that reads the field is not supported, and raises
+# rather than matching the blocks by value or matching the whole field as one block.
+struct TupBox{T} <: AbstractVector{T}
+    b::Tuple{Vector{T}, Vector{T}}
+end
+Base.size(::TupBox) = (4,)
+Base.getindex(s::TupBox, i::Int) = i <= 2 ? s.b[1][i] : s.b[2][i - 2]
+NNP.freeparameters(s::TupBox) = s.b
+NNP.rebuild(::TupBox, d) = TupBox(d)
+
+@testset "a leaf whose one field is a tuple of blocks raises on a structural tangent ($T)" for T in (
+    Float32, Float64)
+    tp = NetworkParameters((L = TupBox((T[1, 2], T[3, 4])),))
+    @test_throws ArgumentError Zygote.gradient(q -> sum(q.L.b[1]) + 2sum(q.L.b[2]), tp)
 end
 
 # ---------------------------------------------------------------------------------------------------
@@ -1068,9 +1114,10 @@ allocations(f::F, a::A) where {F, A} = (f(a); @allocated f(a))
 
 @testset "the flat rule allocates one vector ($T)" for T in (Float32, Float64)
     # the flat gradient is the one vector the rule has to allocate: the gradient set of dense leaves
-    # holds the cotangent's own arrays. The flat vector holds at least 1 MiB, so a second one is three
-    # orders of magnitude above the 1 KiB that the two readings may differ by (Julia 1.11 adds 32 B).
-    # Each side is the least of five readings, because one reading can take in a collection.
+    # holds the cotangent's own arrays. The flat vector holds at least 1 MiB, and a second one would put
+    # the two readings a whole vector apart, so the bound is half a vector: on Julia 1.11 on macOS a
+    # reading of this size can be off by up to 1 MiB. Each side is the least of five readings,
+    # because one reading can take in a collection.
     ps = NetworkParameters((L1 = (W = T.(reshape(1:(512 * 512), 512, 512)), b = T.(1:512)),))
     v, l = flatten(ps)
     @test sizeof(v) ≥ 2^20
@@ -1080,5 +1127,5 @@ allocations(f::F, a::A) where {F, A} = (f(a); @allocated f(a))
     rule = minimum(_ -> allocations(pb, Δ), 1:5)
     vector = minimum(_ -> allocations(similar, v), 1:5)
     @test vector > 0
-    @test abs(rule - vector) ≤ 1024
+    @test abs(rule - vector) < vector ÷ 2
 end

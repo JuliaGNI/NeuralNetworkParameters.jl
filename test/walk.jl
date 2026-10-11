@@ -42,6 +42,13 @@ end
     @test_throws ArgumentError mapparameters(+, a, b)
 end
 
+# A downstream test matches this message by substring, so its wording and its count are pinned.
+@testset "a zipped fold names the set whose keys differ ($T)" for T in (Float32, Float64)
+    a = NetworkParameters((L1 = (W = T[1 2; 3 4], b = T[1, 2]),))
+    b = NetworkParameters((L2 = (W = T[1 2; 3 4], b = T[1, 2]),))
+    @test_throws "and, in argument 2," foldparameters((acc, x, y) -> acc + sum(x .* y), zero(T), a, b)
+end
+
 @testset "in-place walks" begin
     dest = NetworkParameters((L = (x = [1.0, 2.0],),))
     src = NetworkParameters((L = (x = [10.0, 20.0],),))
@@ -101,10 +108,9 @@ end
     @test d == (a = [1.0], b = [2.0])
 end
 
-# A positional branch is the blocks of one multi-block leaf, so it is short — but `_tuple_for` used to
-# fill it against a `nothing` with an `ntuple` over a *runtime* length, which stops being inferable past
-# ten. The generated body splices the `nothing`s in as literals now, so there is no length to be runtime
-# about.
+# A positional branch is the blocks of one multi-block leaf, so it is short — but a walk that filled
+# it against a `nothing` with an `ntuple` over a *runtime* length would stop being inferable past ten.
+# The primitives splice the `nothing`s in as literals, so there is no length to be runtime about.
 @testset "a positional branch of more than ten blocks stays inferable" begin
     blocks = ntuple(i -> [Float64(i)], 12)
     @test only(Base.return_types(foreachparameters,
@@ -202,6 +208,18 @@ end
     # what a missing leaf contributes is the caller's to make
     @test foldparameters((acc, x, y) -> y === nothing ? acc : acc + sum(y), 0.0,
         a, NetworkParameters((L1 = [10.0], L2 = nothing))) == 10.0
+end
+
+# A `Tuple` branch against a set that is `nothing` raises as a keyed branch does: the branch of the
+# set, a set that is a `Tuple`, and a leaf whose storage is a `Tuple` of blocks.
+@testset "a fold of a tuple branch against a nothing set raises ($T)" for T in (Float32, Float64)
+    op = (acc, x, y) -> acc
+    @test_throws "partial sum" foldparameters(op, zero(T), (L = (T[1], T[2]),), (L = nothing,))
+    @test_throws "partial sum" foldparameters(op, zero(T), (T[1], T[2]), nothing)
+    @test_throws "partial sum" foldstorage(op, zero(T), (T[1], T[2]), nothing)
+    lift = Lift(Sym(T[0.7, -0.8, 0.9], 2), T[0.1 -0.2; 0.3 0.4], 4)
+    @test_throws "partial sum" foldstorage(op, zero(T),
+        NetworkParameters((L = lift,)), NetworkParameters((L = nothing,)))
 end
 
 @testset "a mapped tree takes its element type from what the map returned" begin

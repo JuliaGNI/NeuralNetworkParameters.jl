@@ -39,6 +39,8 @@ using ChainRulesCore
 # downstream package's method for a structured leaf is the one that has to be reached.
 import GeometricBase.Utils: L2norm, l2norm
 
+include("unrolled.jl")
+
 export NetworkParameters, params
 
 include("parameters.jl")

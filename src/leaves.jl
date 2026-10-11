@@ -141,7 +141,9 @@ method for it rebuilds the leaf with [`rebuild`](@ref) around the components of 
 belong to its storage — matched by key for a `NamedTuple` of blocks, by field name for a `Tuple` of
 blocks, whose i-th block must be the leaf's i-th field, and for one block by the one field it is —
 each converted by this function in turn, with a zero block where the tangent has none. A storage that
-meets none of these raises an `ArgumentError`.
+meets none of these raises an `ArgumentError`. So does a leaf whose one field is a `Tuple` of blocks
+that is its storage: give such a leaf a `storage_gradient` method of its own, or keep its blocks in
+separate fields.
 
 # Extending
 
@@ -257,12 +259,12 @@ which is why it is not decided there — and there is no cost to buy with it.
 
 For a [`NetworkParameters`](@ref) the answer is already on the type, put there by its constructor, so
 nothing is recomputed and the call folds to a constant. A bare `NamedTuple` or `Tuple` is read in
-place at literal indices, one `@generated` body per branch shape, for the reason the head of
-`walk.jl` gives — so it too costs nothing at any width, depth or shape, and `flatten(ps)` costs
-exactly what `flatten(T, ps)` costs.
+place at literal indices, so it too costs nothing at any width, depth or shape, and `flatten(ps)`
+costs what `flatten(T, ps)` costs.
 """
 @inline parameter_eltype(::NetworkParameters{T}) where {T} = T
-@inline parameter_eltype(ps::Union{NamedTuple, Tuple}) = _promote_eltypes(ps)
+@inline parameter_eltype(ps::Union{NamedTuple, Tuple}) = _unrolled_foldl(
+    _join_leaf_eltype, Union{}, ps)
 @inline parameter_eltype(x::Number) = typeof(x)
 
 @inline function parameter_eltype(x::AbstractArray)
@@ -279,22 +281,7 @@ end
 # without it `flatten` raises rather than guessing an element type for numbers it can see.
 @inline parameter_eltype(x) = Union{}
 
-# Written out rather than recursed for the reason the head of `walk.jl` gives: a `Base.tail` chain
-# costs one specialisation per child, and this one is on `flatten`'s path.
-#
-# It takes the *branch* and not its `values`, which is the other half of that treatment. `values` of a
-# branch materialises a temporary tuple, which is free while the branch stays in registers and is not
-# beyond that: `Base` unrolls a tuple up to 32 fields and drops to its `Any32` fallback past it.
-# `getfield` at a literal index reads a `NamedTuple` and a `Tuple` alike, as `_flatten_children!` does
-# for the same reason.
-@generated function _promote_eltypes(xs::Union{NamedTuple, Tuple})
-    fieldcount(xs) == 0 && return :(Union{})
-    expr = :(parameter_eltype(getfield(xs, 1)))
-    for i in 2:fieldcount(xs)
-        expr = :(_join_eltype($expr, parameter_eltype(getfield(xs, $i))))
-    end
-    expr
-end
+@inline _join_leaf_eltype(S::Type, x) = _join_eltype(S, parameter_eltype(x))
 
 # A set has one element type. `Union{}`, from a leaf with no numbers, joins any type; two numeric
 # types that differ are an error, and nothing is promoted.
