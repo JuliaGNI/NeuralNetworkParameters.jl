@@ -147,11 +147,14 @@ end
         # the message calls the layout argument 2, its place in the walk (KNOWN_ISSUES.md K7)
         @test_throws "and, in argument 2," flatten!(v, renamed, layout)
 
-        # a mismatch below the top level raises at the branch where the keys differ
+        # a mismatch below the top level raises too, and writes nothing before it
         nested = parameterlayout((a = T[1, 2], b = (c = T[3],)))
-        @test_throws "different keys" flatten!(zeros(T, 3), (a = T[5, 6], b = (d = T[7],)), nested)
-        @test_throws "different keys" unflatten!(
-            (a = T[5, 6], b = (d = T[7],)), nested, T[1, 2, 3])
+        deep = (a = T[5, 6], b = (d = T[7],))
+        w = zeros(T, 3)
+        @test_throws "different keys" flatten!(w, deep, nested)
+        @test w == zeros(T, 3)
+        @test_throws "different keys" unflatten!(deep, nested, T[1, 2, 3])
+        @test deep == (a = T[5, 6], b = (d = T[7],))
     end
 end
 

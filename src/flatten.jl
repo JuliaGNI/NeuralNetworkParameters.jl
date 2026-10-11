@@ -94,9 +94,22 @@ function flatten!(v::AbstractVector, ps, layout::ParameterLayout)
         throw(DimensionMismatch(string(
             "flat vector has length ", length(v), ", layout needs ",
             length(layout))))
+    _check_layout_keys(ps, layout)
     _flatten!(v, ps, layout)
     v
 end
+
+# The keys of `ps` against those of the layout at every branch, before the first write, so that a
+# mismatch writes nothing. The primitives compare the keys as they are generated, so at run time
+# this walk only reads the storage of each wrapped leaf.
+@inline _check_layout_keys(ps::NetworkParameters, l::ParametersLayout) = _check_layout_keys(
+    params(ps), l.inner)
+@inline _check_layout_keys(ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
+    _check_layout_keys, ps, l.children)
+@inline _check_layout_keys(ps::Tuple, l::TupleLayout) = _unrolled_foreach(
+    _check_layout_keys, ps, l.children)
+@inline _check_layout_keys(x, l::WrappedLayout) = _check_layout_keys(freeparameters(x), l.inner)
+@inline _check_layout_keys(_, _) = nothing
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
 @inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
@@ -192,6 +205,7 @@ function unflatten!(ps, layout::ParameterLayout, v::AbstractVector)
         throw(DimensionMismatch(string(
             "flat vector has length ", length(v), ", layout needs ",
             length(layout))))
+    _check_layout_keys(ps, layout)
     _unflatten!(ps, layout, v)
     ps
 end

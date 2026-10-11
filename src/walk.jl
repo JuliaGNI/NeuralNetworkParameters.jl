@@ -130,14 +130,10 @@ indexed in place rather than taken apart, so nothing is materialised on the way 
 
 See [`mapparameters!`](@ref) for the in-place variant that returns its destination.
 """
-@inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple},
+@inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple, Tuple},
         rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(
-        _FixFirst(foreachparameters, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
-end
-
-@inline function foreachparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(_FixFirst(foreachparameters, f), ps, map(_as_tuple, rest)...)
+    b = _branch(ps)
+    _unrolled_foreach(_FixFirst(foreachparameters, f), b, map(Base.Fix1(_like, b), rest)...)
 end
 
 @inline function foreachparameters(f, x, rest::Vararg{Any, N}) where {N}
@@ -174,14 +170,10 @@ into the leaf. Allocation-free on the same terms.
     dest
 end
 
-@inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple},
+@inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple, Tuple},
         rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(
-        _FixFirst(_foreach_storage, f), _as_namedtuple(ps), map(_as_namedtuple, rest)...)
-end
-
-@inline function _foreach_storage(f, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    _unrolled_foreach(_FixFirst(_foreach_storage, f), ps, map(_as_tuple, rest)...)
+    b = _branch(ps)
+    _unrolled_foreach(_FixFirst(_foreach_storage, f), b, map(Base.Fix1(_like, b), rest)...)
 end
 
 @inline function _foreach_storage(f, x, rest::Vararg{Any, N}) where {N}
@@ -251,17 +243,12 @@ foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
 32.0
 ```
 """
-@inline function foldparameters(op, init, ps::Union{NetworkParameters, NamedTuple},
+@inline function foldparameters(op, init, ps::Union{NetworkParameters, NamedTuple, Tuple},
         rest::Vararg{Any, N}) where {N}
-    nts = map(_as_namedtuple, rest)
-    any(isnothing, nts) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldparameters, op), init, _as_namedtuple(ps), nts...)
-end
-
-@inline function foldparameters(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    ts = map(_as_tuple, rest)
-    any(isnothing, ts) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldparameters, op), init, ps, ts...)
+    b = _branch(ps)
+    rs = map(Base.Fix1(_like, b), rest)
+    any(isnothing, rs) && _no_folded_skip_error()
+    _unrolled_foldl(_FixFirst(foldparameters, op), init, b, rs...)
 end
 
 @inline foldparameters(op, init, x, rest::Vararg{Any, N}) where {N} = op(init, x, rest...)
@@ -294,17 +281,12 @@ foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
 11.0
 ```
 """
-@inline function foldstorage(op, init, ps::Union{NetworkParameters, NamedTuple},
+@inline function foldstorage(op, init, ps::Union{NetworkParameters, NamedTuple, Tuple},
         rest::Vararg{Any, N}) where {N}
-    nts = map(_as_namedtuple, rest)
-    any(isnothing, nts) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldstorage, op), init, _as_namedtuple(ps), nts...)
-end
-
-@inline function foldstorage(op, init, ps::Tuple, rest::Vararg{Any, N}) where {N}
-    ts = map(_as_tuple, rest)
-    any(isnothing, ts) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldstorage, op), init, ps, ts...)
+    b = _branch(ps)
+    rs = map(Base.Fix1(_like, b), rest)
+    any(isnothing, rs) && _no_folded_skip_error()
+    _unrolled_foldl(_FixFirst(foldstorage, op), init, b, rs...)
 end
 
 @inline function foldstorage(op, init, x, rest::Vararg{Any, N}) where {N}
@@ -328,6 +310,13 @@ end
 
 @inline _as_tuple(x::Tuple) = x
 @inline _as_tuple(x::Nothing) = nothing
+
+# The branch of `ps`, and a further set `x` as a branch of the same kind: keyed beside a keyed
+# branch, positional beside a positional one.
+@inline _branch(ps::NetworkParameters) = params(ps)
+@inline _branch(ps) = ps
+@inline _like(::NamedTuple, x) = _as_namedtuple(x)
+@inline _like(::Tuple, x) = _as_tuple(x)
 
 # The storage of a further set's leaf, where a `nothing` stays a `nothing`. A leaf whose storage is
 # one array then hands `f` or `op` that array and the `nothing`; a leaf whose storage is several blocks
