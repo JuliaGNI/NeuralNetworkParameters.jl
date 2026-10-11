@@ -63,6 +63,29 @@ fixed; the fix goes in `CHANGELOG.md`.
 - kind: found late
 - found: 2026-10-11
 
+### K9 · A branch of the wrong kind raises a `MethodError`, not an `ArgumentError`
+
+- location: `src/flatten.jl:116`
+- evidence: `_check_layout_keys(_, _) = nothing` accepts a `NamedTuple` branch against a
+  `TupleLayout`, and a `Tuple` branch against a `NestedLayout`, so the mismatch reaches
+  `_flatten!` or `_unflatten!`, which have no method for it. With `l` the layout of
+  `NetworkParameters((a = ([1.0, 2.0], [3.0]),))` and
+  `bad = NetworkParameters((a = (x = [9.0, 9.0], y = [9.0]),))`, both `flatten!(copy(v), bad, l)`
+  and `unflatten!(bad, l, v)` raise a `MethodError` on Julia 1.13.1. Nothing is written before the
+  error. A key or width mismatch raises an `ArgumentError` that names the set and the layout.
+- kind: defect
+- found: #42
+
+### K10 · The first call of `map_cotangent` compiles twice as long as on 0.5.0
+
+- location: `src/derivatives.jl:263`
+- evidence: `julia --startup-file=no --project=. scripts/map_cotangent_cost.jl`, one cold process
+  per run, on Julia 1.13.1, at 369 leaves: the first call takes 0.50 s and 0.51 s on 0.5.0
+  (`17d8356`), and 1.12 s and 1.20 s on the head of #42. The second call allocates 21 520 B on both.
+  The cause is not known, and 8 and 64 leaves are not measured.
+- kind: defect
+- found: #42
+
 ## Tests
 
 ### K5 · Test comments carry history and measurements
@@ -85,3 +108,16 @@ fixed; the fix goes in `CHANGELOG.md`.
   test needs a difference under a stated tolerance. The same line is on 0.5.0 (`17d8356`).
 - kind: defect
 - found: 2026-10-11
+
+### K8 · The bound of the flat-rule allocation test leaves a margin of 2 %
+
+- location: `test/derivatives.jl:1130`
+- evidence: the testset "the flat rule allocates one vector" asserts
+  `abs(rule - vector) < vector ÷ 2`, where each side is already the least of five readings. On
+  Julia 1.11.9 on macOS in CI, the Float64 difference read 1 032 224 B (the first attempt of
+  "Julia min - macOS-latest" on `5c929e8`) and 507 936 B (on `e0d0cad`), against a bound of
+  1 056 784 B. Both values are 2^k − 16 352. The Float32 bound is 532 496 B, so the same 1 MiB
+  extra fails there. 120 local trials on Julia 1.11.9 aarch64, with 1 and 2 threads, read 32 B
+  each. The cause is not known.
+- kind: defect
+- found: #42
