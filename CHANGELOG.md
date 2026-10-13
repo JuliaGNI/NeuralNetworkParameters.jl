@@ -4,6 +4,39 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A walk inside the function of another walk allocates nothing, except a storage walk of four or
+  more sets inside a walk of fewer (K11, #44).** On 0.5.1, `mapparameters!` or
+  `foreachparameters` in the function of a `foreachparameters`, `mapstorage!` in a `mapstorage!`,
+  and each fold in itself boxed the inner function at every leaf: on a set of 3 leaves, 96 B per
+  step for the in-place walks, 192 B and 240 B with five captured `Float32` and `Float64`
+  coefficients, and 144 B for the folds. The inner walk put its own methods on the inference stack a
+  second time, with a function argument nested one level deeper, and inference widened that call. A
+  per-leaf optimizer step runs such a walk: the per-leaf `Adam` step of a `CompositeMethod` in
+  GeometricOptimizers allocated 256 B (`Float32`) and 288 B (`Float64`) on a dense set of 3 leaves
+  where `Adam` on the whole set allocates nothing, and now allocates nothing as well; on a set with a
+  Stiefel leaf it allocates what `Adam` on the whole set allocates. `foreachparameters`,
+  `mapparameters!`, `mapstorage!`, `foldparameters` and `foldstorage` are now one generated body per
+  tree type, with one call per leaf and no recursion at run time. The `nothing` skip, the `nothing`
+  raise of a fold, the key and arity errors and the fold order are as before; a key or arity error
+  below the top of the tree is now raised before `f` runs on any leaf, where 0.5.1 ran `f` on the
+  leaves before the branch at fault. `test/walk.jl` tests
+  each walk inside itself in `Float32` and `Float64`, and `scripts/nested_walk_cost.jl`, which is new,
+  measures it.
+
+### Changed
+
+- **The first call of `mapparameters!` and `mapstorage!` compiles about 0.1 s longer on a larger
+  set, and the folds compile as fast or faster.** One cold process per row, Julia 1.13.1, load average
+  about 10, `scripts/nested_walk_cost.jl <walk> <shape>`: `mapparameters!` takes 0.03 s against
+  0.06 s on 0.5.1 on 3 leaves, 0.16 s against 0.09 s on 64 leaves of depth 4, and 1.24 s against
+  1.11 s on 369 leaves of depth 1; `foldparameters` takes 0.11 s against 0.28 s on 369 leaves, and
+  `foldstorage` 0.15 s against 0.32 s. A later call takes the same time and allocates nothing on
+  both. `docs/src/design.md` has the full table.
+
 ## [0.5.1] — 2026-10-11
 
 ### Changed

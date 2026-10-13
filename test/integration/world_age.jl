@@ -1,10 +1,12 @@
 # The generated walks still work when the sources are evaluated rather than loaded from a cache.
 #
-# Every across-children walk is one of the three generated primitives of `src/unrolled.jl`, whose
-# generators call `_children_arity`, `_child_args`, `_branch_keys`, `_child_expr` and their two error
-# helpers. A generator runs in the world age of its own method definition, so a helper defined further
-# down the file is invisible to it and the generator raises `MethodError: no method matching
-# _children_arity(…)  The applicable method may be too new`.
+# The maps, the layout and the flattening walk across children with the three generated primitives of
+# `src/unrolled.jl`, whose generators call `_children_arity`, `_child_args`, `_branch_keys`,
+# `_child_expr`, `_check_child_keys` and their two error helpers. The in-place walks and the folds are
+# generated bodies of `src/walk.jl`, whose generators call `_foreach_body`, `_fold_body`,
+# `_tree_nodes`, `_tree_nodes!` and `_like_type` as well. A generator runs in the world age of its own
+# method definition, so a helper defined further down is invisible to it and the generator raises
+# `MethodError: no method matching _children_arity(…)  The applicable method may be too new`.
 #
 # It cannot be caught in-process. Loading a precompiled package deserialises every method in the
 # module into one world age, which is exactly the condition that hides it — so the whole of the rest
@@ -12,9 +14,10 @@
 # and a subprocess is the only way to ask for it.
 #
 # Cheap enough to keep: the package's dependency is `ChainRulesCore`, so a from-source load is about a
-# second. The walks below reach every primitive: `_unrolled_map` through `mapparameters`, `unflatten`
-# and the `foreach` walks, `_unrolled_foldl` through the folds and `parameter_eltype`, and
-# `_unrolled_mapaccum` through `parameterlayout`. The walks run at **two** arities, because the key
+# second. The walks below reach every generator: `_unrolled_map` through `mapparameters` and
+# `unflatten`, `_unrolled_foldl` through `parameter_eltype`, `_unrolled_mapaccum` through
+# `parameterlayout`, and the generated bodies of the `foreach` walks and of the folds. The walks run
+# at **two** arities, because the key
 # and index helpers a further set needs are only reached at the second — one set has no second set to
 # pair against, so an arity-one walk would leave exactly that chain of helpers untried.
 #
@@ -36,19 +39,20 @@ ps = (L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],))
 mapparameters(zero, ps) == (L1 = (W = [0.0 0.0], b = [0.0]), L2 = (W = [0.0;;],)) || exit(1)
 mapparameters(+, ps, ps).L1.b == [6.0] || exit(2)
 
-# `_unrolled_foreach`, which is `_unrolled_map`, at arity one
+# the generated `foreachparameters`, at arity one
 let n = Ref(0)
     foreachparameters(_ -> n[] += 1, ps)
     n[] == 3 || exit(3)
 end
 
-# and at arity two, which is what reaches `_branch_keys` and `_child_expr` from a generator
+# and at arity two, which is what reaches `_like_type`, `_branch_keys` and `_check_child_keys` from
+# a generator
 let dest = mapparameters(zero, ps)
     mapparameters!(copyto!, dest, ps)
     dest == ps || exit(8)
 end
 
-# and the `nothing` skip, which is the other branch of `_child_expr`
+# and the `nothing` skip, which is the other branch of `_like_type`
 let n = Ref(0)
     foreachparameters((_, _) -> n[] += 1, ps, nothing)
     n[] == 0 || exit(9)
@@ -67,8 +71,8 @@ end
 # and the empty branch, for which each primitive writes a body with no child
 flatten((L1 = NamedTuple(), L2 = (W = [1.0],), L3 = (t = (),)))[1] == [1.0] || exit(15)
 
-# `_unrolled_foldl` at arity one, and at the arity that reaches `_branch_keys` and `_child_expr`
-# from the fold's own generator, through both folds
+# the generated folds at arity one, and at the arity that reaches `_like_type`, `_branch_keys` and
+# `_check_child_keys` from the fold's own generator, through both folds
 foldparameters((a, x) -> a + length(x), 0, ps) == 4 || exit(7)
 foldparameters((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(10)
 foldstorage((a, x, y) -> a + sum(x) * sum(y), 0.0, ps, ps) == 34.0 || exit(11)

@@ -86,6 +86,18 @@ fixed; the fix goes in `CHANGELOG.md`.
 - kind: defect
 - found: #42
 
+### K11 · A storage walk of four or more sets inside a walk of fewer sets allocates at every leaf
+
+- location: `src/walk.jl`, the leaf method of `_foreach_storage` and of `foldstorage`
+- evidence: `julia --project=. scripts/nested_walk_cost.jl wide`, Julia 1.13.1, on a set of 3
+  leaves, prints 192 B for `mapstorage!` of 4 sets in `mapstorage!` of 2 and 48 B for `foldstorage`
+  of 4 in `foldstorage` of 2, in `Float32` and in `Float64`, where `foreachparameters` and
+  `foldparameters` print 0 B. The storage walks call their leaf method at each leaf, because
+  `freeparameters` decides at run time whether a leaf is its own storage, and inference widens that
+  leaf method on its second time on the stack. Issue #44.
+- kind: defect
+- found: #43
+
 ## Tests
 
 ### K5 · Test comments carry history and measurements

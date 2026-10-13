@@ -222,6 +222,207 @@ end
         NetworkParameters((L = lift,)), NetworkParameters((L = nothing,)))
 end
 
+# A walk inside the function of another walk, as an optimizer runs one step per leaf: the outer walk
+# runs the inner walk of the same kind on a one-leaf set of each leaf. The inner function is a
+# callable struct, whose type nests one level deeper than the outer one, once around a function and
+# once around a closure with captured coefficients, and the `TwoBlock` leaf takes the storage walks
+# into the keyed storage of a leaf as well.
+struct _InnerStep{F} <: Function
+    f::F
+end
+(s::_InnerStep)(args::Vararg{Any, N}) where {N} = s.f(args...)
+
+_axpy_leaf!(d, a) = (d .+= a; nothing)
+# a step that captures its coefficients, as an Adam step does
+_scaled_axpy(α, β, γ, δ, ε) = (d, a) -> (d .+= (α * β * γ * δ * ε) .* a; nothing)
+function _dot_leaf(acc, a, b)
+    for i in eachindex(a, b)
+        acc += a[i] * b[i]
+    end
+    acc
+end
+_one_leaf(x) = NetworkParameters((leaf = x,))
+# fixed entries of type `T`, all different, for a leaf of the given size
+_entries(::Type{T}, dims...) where {T} = T.(reshape(1:prod(dims), dims) ./ 7)
+
+function _nested_foreach!(X, Y)
+    foreachparameters(X, Y) do x, y
+        mapparameters!(_InnerStep(_axpy_leaf!), _one_leaf(x), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_mapstorage!(X, Y)
+    mapstorage!(X, Y) do x, y
+        mapstorage!(_InnerStep(_axpy_leaf!), _one_leaf(x), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_foreach_captured!(X, Y, c)
+    foreachparameters(X, Y) do x, y
+        mapparameters!(_InnerStep(_scaled_axpy(c, c, c, c, c)), _one_leaf(x), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_mapstorage_captured!(X, Y, c)
+    mapstorage!(X, Y) do x, y
+        mapstorage!(_InnerStep(_scaled_axpy(c, c, c, c, c)), _one_leaf(x), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_fold(X, Y, init)
+    foldparameters(init, X, Y) do acc, x, y
+        foldparameters(_InnerStep(_dot_leaf), acc, _one_leaf(x), _one_leaf(y))
+    end
+end
+function _nested_foldstorage(X, Y, init)
+    foldstorage(init, X, Y) do acc, x, y
+        foldstorage(_InnerStep(_dot_leaf), acc, _one_leaf(x), _one_leaf(y))
+    end
+end
+
+function _nested_allocs(walk::F, args::Vararg{Any, N}) where {F, N}
+    (walk(args...); @allocated walk(args...))
+end
+
+@testset "a walk in the function of another walk allocates nothing ($T)" for T in (Float32, Float64)
+    dense() = NetworkParameters((
+        L1 = (W = _entries(T, 3, 2), b = _entries(T, 3)), L2 = (W = _entries(T, 1, 3),)))
+    X, Y = dense(), dense()
+    @test _nested_allocs(_nested_foreach!, X, Y) == 0
+    @test _nested_allocs(_nested_mapstorage!, X, Y) == 0
+    @test _nested_allocs(_nested_fold, X, Y, zero(T)) == 0
+    @test _nested_allocs(_nested_foldstorage, X, Y, zero(T)) == 0
+    @test _nested_allocs(_nested_foreach_captured!, X, Y, one(T)) == 0
+    @test _nested_allocs(_nested_mapstorage_captured!, X, Y, one(T)) == 0
+
+    structured() = NetworkParameters((
+        L1 = (W = TwoBlock(Sym(_entries(T, 3), 2), _entries(T, 1, 2), 3),),
+        L2 = (b = _entries(T, 2),)))
+    S, R = structured(), structured()
+    @test _nested_allocs(_nested_mapstorage!, S, R) == 0
+    @test _nested_allocs(_nested_foldstorage, S, R, zero(T)) == 0
+
+    # and the walks still do the work: one more step adds `Y` to `X`, and the fold is the inner product
+    W = copy(X.L1.W)
+    _nested_foreach!(X, Y)
+    @test X.L1.W ≈ W + Y.L1.W
+    inner = sum(X.L1.W .* Y.L1.W) + sum(X.L1.b .* Y.L1.b) + sum(X.L2.W .* Y.L2.W)
+    @test _nested_fold(X, Y, zero(T)) ≈ inner
+    A = copy(S.L1.W.B)
+    _nested_mapstorage!(S, R)
+    @test S.L1.W.B ≈ A + R.L1.W.B
+end
+
+# The inner walk takes four sets where the outer one takes two, as the `Adam` step of a leaf walks six
+# sets inside a walk of five. A leaf method of the walk between the generated body and `f` would be
+# inferred a second time from the same body, with a longer argument list, which inference shortens to
+# a `Vararg` and then calls without specialising on `f`. These allocate at every leaf unless
+# `foreachparameters` and `foldparameters` call `f` and `op` at a leaf directly.
+function _scaled_axpy3(α, β, γ, δ, ε)
+    (d, a, b, c) -> (d .+= (α * β * γ * δ * ε) .* a .* b .* c; nothing)
+end
+function _product_leaf(acc, a, b, c, d)
+    for i in eachindex(a, b, c, d)
+        acc += a[i] * b[i] * c[i] * d[i]
+    end
+    acc
+end
+function _nested_foreach_wider!(X, Y, c)
+    foreachparameters(X, Y) do x, y
+        mapparameters!(
+            _InnerStep(_scaled_axpy3(c, c, c, c, c)), _one_leaf(x), _one_leaf(y),
+            _one_leaf(y), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_fold_wider(X, Y, init)
+    foldparameters(init, X, Y) do acc, x, y
+        foldparameters(
+            _InnerStep(_product_leaf), acc, _one_leaf(x), _one_leaf(y), _one_leaf(y), _one_leaf(y))
+    end
+end
+
+@testset "a walk of four sets in the function of a walk of two allocates nothing ($T)" for T in (
+    Float32, Float64)
+    dense() = NetworkParameters((
+        L1 = (W = _entries(T, 3, 2), b = _entries(T, 3)), L2 = (W = _entries(T, 1, 3),)))
+    X, Y = dense(), dense()
+    @test _nested_allocs(_nested_foreach_wider!, X, Y, one(T)) == 0
+    @test _nested_allocs(_nested_fold_wider, X, Y, zero(T)) == 0
+
+    # and the walks still do the work: one more step adds `Y .^ 3` to `X`, and the fold is the sum
+    # of `X .* Y .^ 3`
+    W = copy(X.L1.W)
+    _nested_foreach_wider!(X, Y, one(T))
+    @test X.L1.W ≈ W + Y.L1.W .^ 3
+    @test _nested_fold_wider(X, Y, zero(T)) ≈
+          sum(X.L1.W .* Y.L1.W .^ 3) + sum(X.L1.b .* Y.L1.b .^ 3) +
+          sum(X.L2.W .* Y.L2.W .^ 3)
+end
+
+# The keys and widths of the whole tree are checked when the walk is generated, so a mismatch below
+# the top raises before `f` runs on any leaf, and a walk that raises has changed nothing.
+@testset "a mismatch below the top of the tree raises before any leaf is walked" begin
+    a = (L1 = (W = [1.0],), L2 = (a = [1.0], b = [2.0]))
+    calls = Ref(0)
+    @test_throws ArgumentError foreachparameters((_, _) -> calls[] += 1, a,
+        (L1 = (W = [1.0],), L2 = (b = [1.0], a = [2.0])))
+    @test_throws ArgumentError foreachparameters((_, _) -> calls[] += 1, a,
+        (L1 = (W = [1.0],), L2 = (a = [1.0],)))
+    @test calls[] == 0
+end
+
+# A field type that is not concrete leaves the children of that node to the run time: the walk goes
+# into the branch that the field holds, as it does into a branch whose type it knows.
+@testset "a walk goes into a branch behind a field type that is not concrete" begin
+    loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((
+        (W = [1.0, 2.0], b = [3.0]), [4.0]))
+    seen = Float64[]
+    foreachparameters(x -> append!(seen, x), loose)
+    @test seen == [1.0, 2.0, 3.0, 4.0]
+    @test foldparameters((acc, x) -> acc + sum(x), 0.0, loose) == 10.0
+    @test foldparameters((acc, x, y) -> acc + sum(x) * sum(y), 0.0, loose, loose) ==
+          9.0 + 9.0 + 16.0
+end
+
+# A leaf of a further set whose field type is not concrete can hold a `nothing` that only the run time
+# knows, and the in-place walks skip it there as they skip a `nothing` whose type they know.
+@testset "a nothing behind a field type that is not concrete is skipped" begin
+    holes = NamedTuple{(:a, :b), Tuple{Any, Union{Nothing, Vector{Float64}}}}((
+        [10.0], nothing))
+    dest = (a = [1.0], b = [2.0])
+    foreachparameters((d, s) -> (d .+= s; nothing), dest, holes)
+    @test dest == (a = [11.0], b = [2.0])
+    dest = NetworkParameters((a = [1.0], b = [2.0]))
+    mapparameters!((d, s) -> (d .+= s; nothing), dest, NetworkParameters(holes))
+    @test params(dest) == (a = [11.0], b = [2.0])
+end
+
+# The same for a further set: the walk goes into its branch at run time, beside the branch of the first
+# set whose type it knows.
+@testset "a walk goes into a branch of a further set behind a field type that is not concrete" begin
+    loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((
+        (W = [1.0, 2.0], b = [3.0]), [4.0]))
+    zeroed() = (L1 = (W = [0.0, 0.0], b = [0.0]), L2 = [0.0])
+    added = (L1 = (W = [1.0, 2.0], b = [3.0]), L2 = [4.0])
+    dest = zeroed()
+    foreachparameters((d, s) -> (d .+= s; nothing), dest, loose)
+    @test dest == added
+    dest = zeroed()
+    mapstorage!((d, s) -> (d .+= s; nothing), dest, loose)
+    @test dest == added
+    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, added, loose) == 30.0
+    @test foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, added, loose) == 30.0
+end
+
+@testset "a further set of the other kind of branch raises" begin
+    keyed, positional = (a = [1.0],), ([1.0],)
+    @test_throws MethodError foreachparameters((_, _) -> nothing, keyed, positional)
+    @test_throws MethodError mapstorage!((_, _) -> nothing, keyed, positional)
+    @test_throws MethodError foldparameters((acc, _, _) -> acc, 0.0, keyed, positional)
+    @test_throws MethodError foldstorage((acc, _, _) -> acc, 0.0, keyed, positional)
+end
+
 @testset "a mapped tree takes its element type from what the map returned" begin
     @test mapstorage(x -> Float32.(x), ps) isa NetworkParameters{Float32}
     @test mapparameters(x -> Float32.(x), ps) isa NetworkParameters{Float32}

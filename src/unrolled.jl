@@ -3,9 +3,10 @@
 #
 # Each is a generated body that reads child `i` of the branch, and of every further set, with
 # `getfield` at the literal index `i`. So every child is inferred at its own type, nothing is
-# materialised on the way in, and a walk compiles to straight-line code at any width. Every walk of the
-# package is dispatch on the node type plus one call of a primitive. `docs/src/design.md` gives the
-# reasons and the measurements.
+# materialised on the way in, and a walk compiles to straight-line code at any width. The maps, the
+# layout and the flattening are dispatch on the node type plus one call of a primitive; the in-place
+# walks and the folds of `walk.jl` write the whole tree in one generated body, with the key and arity
+# checks of this file. `docs/src/design.md` gives the reasons and the measurements.
 #
 # A branch is a `NamedTuple`, a `Tuple` or any struct, whose fields are its children. A further set
 # that is `nothing` gives `nothing` at each child. Two named branches pair by key, and their keys must
@@ -54,13 +55,20 @@ _branch_keys(::Type) = nothing
 @noinline _child_keys_error(ks, rk, j::Int) = throw(ArgumentError(string(
     "parameter sets have different keys: ", ks, " and, in argument ", j, ", ", rk)))
 
+# A check that the further set `j`, of type `r`, has the keys `ks` of the branch beside it, where
+# both have keys.
+function _check_child_keys(ks, r::Type, j::Int)
+    rk = _branch_keys(r)
+    # `j + 1`: the message counts the parameter sets, of which the branch is the first
+    ks === nothing || rk === nothing || rk === ks || _child_keys_error(ks, rk, j + 1)
+    nothing
+end
+
 # Child `i` of the further set `j` of type `r`, as an expression: `nothing` for a set that is
 # `nothing`, and `getfield` at a literal index otherwise, after a check of the keys.
 function _child_expr(ks, r::Type, j::Int, i::Int)
     r === Nothing && return :nothing
-    rk = _branch_keys(r)
-    # `j + 1`: the message counts the parameter sets, of which `xs` is the first
-    ks === nothing || rk === nothing || rk === ks || _child_keys_error(ks, rk, j + 1)
+    _check_child_keys(ks, r, j)
     :(getfield(rest[$j], $i))
 end
 
