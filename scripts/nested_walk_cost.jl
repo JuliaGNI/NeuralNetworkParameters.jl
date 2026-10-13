@@ -4,11 +4,13 @@
 # Run with the repository as the active project, one row per process:
 #
 #     julia --project=. scripts/nested_walk_cost.jl nested
+#     julia --project=. scripts/nested_walk_cost.jl wide
 #     julia --project=. scripts/nested_walk_cost.jl <walk> <shape>
 #
 # `nested` prints the allocations of each in-place walk and fold when its function runs a second walk
 # of the same kind on a one-leaf set, the way an optimizer that steps each leaf with its own method
-# does. `<walk>` is one of `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
+# does. `wide` does the same with an inner walk of four sets inside an outer walk of two, as
+# `KNOWN_ISSUES.md` K11 cites. `<walk>` is one of `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
 # `small` (3 leaves, depth 2), `deep` (64 leaves, depth 4) and `flat` (369 leaves, depth 1). That mode
 # prints the first-call time of a cold process, which is compilation and a negligible run, the
 # allocations of the second call, and the fastest of 1000 calls.
@@ -60,6 +62,35 @@ nested_foldstorage(X, Y) = foldstorage(zero(eltype(X.L1.W)), X, Y) do acc, x, y
     foldstorage(Step(dot_leaf), acc, one_leaf(x), one_leaf(y))
 end
 
+# An inner walk of four sets inside an outer walk of two.
+axpy3_leaf!(d, a, b, c) = (d .+= a .+ b .+ c; nothing)
+dot3_leaf(acc, a, b, c, d) = dot_leaf(acc, a, b) + dot_leaf(zero(acc), c, d)
+function wide_foreach!(X, Y)
+    foreachparameters(X, Y) do x, y
+        mapparameters!(
+            Step(axpy3_leaf!), one_leaf(x), one_leaf(y), one_leaf(y), one_leaf(y))
+        nothing
+    end
+end
+function wide_mapstorage!(X, Y)
+    mapstorage!(X, Y) do x, y
+        mapstorage!(Step(axpy3_leaf!), one_leaf(x), one_leaf(y), one_leaf(y), one_leaf(y))
+        nothing
+    end
+end
+function wide_fold(X, Y)
+    foldparameters(zero(eltype(X.L1.W)), X, Y) do acc, x, y
+        foldparameters(
+            Step(dot3_leaf), acc, one_leaf(x), one_leaf(y), one_leaf(x), one_leaf(y))
+    end
+end
+function wide_foldstorage(X, Y)
+    foldstorage(zero(eltype(X.L1.W)), X, Y) do acc, x, y
+        foldstorage(
+            Step(dot3_leaf), acc, one_leaf(x), one_leaf(y), one_leaf(x), one_leaf(y))
+    end
+end
+
 function allocations(f::F, args::Vararg{Any, N}) where {F, N}
     f(args...)
     @allocated f(args...)
@@ -78,6 +109,19 @@ function nested()
         for (name, walk) in (("foreachparameters", nested_foreach_captured!),
             ("mapstorage!", nested_mapstorage_captured!))
             println(rpad("$T $name in $name, captured:", 48), allocations(walk, X, Y, one(T)), " B")
+        end
+    end
+end
+
+function wide()
+    for T in (Float32, Float64)
+        set() = NetworkParameters((
+            L1 = (W = rand(T, 3, 2), b = rand(T, 3)), L2 = (W = rand(T, 1, 3),)))
+        X, Y = set(), set()
+        for (name, walk) in (("foreachparameters", wide_foreach!), (
+            "mapstorage!", wide_mapstorage!),
+            ("foldparameters", wide_fold), ("foldstorage", wide_foldstorage))
+            println(rpad("$T $name of 4 in $name of 2:", 60), allocations(walk, X, Y), " B")
         end
     end
 end
@@ -117,4 +161,4 @@ function cost(walk, name)
         bytes, " B, fastest ", round(Int, fastest * 1e9), " ns")
 end
 
-ARGS == ["nested"] ? nested() : cost(ARGS...)
+ARGS == ["nested"] ? nested() : ARGS == ["wide"] ? wide() : cost(ARGS...)

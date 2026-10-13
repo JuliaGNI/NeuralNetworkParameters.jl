@@ -8,7 +8,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 ### Fixed
 
-- **A walk inside the function of another walk allocates nothing.** On 0.5.1, `mapparameters!` or
+- **A walk inside the function of another walk allocates nothing, except a storage walk of four or
+  more sets inside a walk of fewer (K11, #44).** On 0.5.1, `mapparameters!` or
   `foreachparameters` in the function of a `foreachparameters`, `mapstorage!` in a `mapstorage!`,
   and each fold in itself boxed the inner function at every leaf: on a set of 3 leaves, 96 B per
   step for the in-place walks, 192 B and 240 B with five captured `Float32` and `Float64`

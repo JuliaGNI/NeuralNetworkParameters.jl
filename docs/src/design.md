@@ -75,7 +75,10 @@ second call to a `Vararg` and does not specialise it on its function. The per-le
 GeometricOptimizers walks six sets inside a walk of five, and then boxes its function at every leaf,
 32 B in `Float32` and 48 B in `Float64`. So these two walks call `f` or `op` at a leaf directly, and
 `test/walk.jl` runs a walk of four sets inside a walk of two for each. The storage walks call their
-leaf method, which decides at run time with `freeparameters` whether a leaf is its own storage.
+leaf method, which decides at run time with `freeparameters` whether a leaf is its own storage, so
+`mapstorage!` and `foldstorage` of four or more sets inside a walk of fewer sets still allocate at
+every leaf: on the 3 leaves of `scripts/nested_walk_cost.jl wide`, 192 B and 48 B per step
+(`KNOWN_ISSUES.md` K11).
 
 **What it costs.** The table compares NNP 0.5.1 with the generated walks: the first call in a cold
 process, on a set of 3 leaves of depth 2, 64 leaves of depth 4, and 369 leaves of depth 1, at arity

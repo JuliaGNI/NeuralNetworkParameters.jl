@@ -287,7 +287,8 @@ end
 Like [`mapparameters!`](@ref), but `f` is handed the [`freeparameters`](@ref) of each leaf.
 
 No `rebuild` is needed: the storage of a leaf is the leaf's own memory, so writing into it is writing
-into the leaf. Allocation-free on the same terms.
+into the leaf. Allocation-free on the same terms, except inside the function of another walk that
+takes fewer sets, where this walk takes four or more: there it allocates at every leaf.
 """
 @inline function mapstorage!(f, dest, srcs::Vararg{Any, N}) where {N}
     _foreach_storage(f, dest, srcs...)
@@ -385,6 +386,9 @@ twice, and for a skew-symmetric or triangular matrix there is no dense reading t
 A `nothing` in place of a leaf reaches `op` as far as there is one leaf to pair it with, on the terms
 [`mapstorage`](@ref) states: the storage of a `SymmetricMatrix` is a single array, and a leaf whose
 storage is several blocks raises instead, since one `nothing` cannot stand for each of them.
+
+Allocation-free on the terms of `foldparameters`, except inside the function of another walk that
+takes fewer sets, where this fold takes four or more: there it allocates at every leaf.
 
 # Examples
 
