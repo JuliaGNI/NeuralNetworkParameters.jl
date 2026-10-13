@@ -1,10 +1,132 @@
-# Recursive walks over a parameter set.
+# Walks over a parameter set.
 #
-# Each walk recurses into the `NamedTuple`s and `Tuple`s, does something at each leaf and, for a map,
-# puts the result back in the same shape. The recursion is written once, over the
-# `freeparameters`/`rebuild` protocol, so it never needs to know which structured types exist. The
-# walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`, `Tuple` or a leaf; the walk
-# across the children of one branch is one call of a primitive of `unrolled.jl`.
+# Each walk goes into the `NamedTuple`s and `Tuple`s, does something at each leaf and, for a map,
+# puts the result back in the same shape. The walk is written once, over the
+# `freeparameters`/`rebuild` protocol, so it never needs to know which structured types exist.
+#
+# The in-place walks and the folds read the whole tree off the types of their arguments and are one
+# generated body each, with one call per leaf and no recursion at run time. A walk often runs inside
+# the function of another walk, such as an optimizer step per leaf, and inference widens the types
+# of a method that it finds twice on its stack with more deeply nested arguments; a walk that recurses
+# through its own methods there dispatches dynamically and allocates at every leaf. The maps build a
+# new tree: their walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`, `Tuple` or a
+# leaf, and their walk across the children of one branch is one call of a primitive of `unrolled.jl`.
+
+const _Branch = Union{NetworkParameters, NamedTuple, Tuple}
+
+# The type of the further set of type `R` beside a branch of type `B`, as `_like` makes it: `Nothing`
+# for a set that is `nothing`, `missing` where `R` is not concrete and only the run time knows, and
+# `nothing` where `_like` has no method.
+function _like_type(@nospecialize(B::Type), @nospecialize(R::Type))
+    R === Nothing && return Nothing
+    isconcretetype(R) || return missing
+    B <: NamedTuple && R <: NetworkParameters && return fieldtype(R, 1)
+    B <: NamedTuple && R <: NamedTuple && return R
+    B <: Tuple && R <: Tuple && return R
+    nothing
+end
+
+# The nodes of a whole-tree walk, in the order `flatten` writes the leaves, pushed to `nodes`. A node
+# is `(x, rs, leaf, skip)`: the expression that reads a leaf of the first set, those that read the
+# node beside it in each further set, whether its type is known to be a leaf's, and whether a further
+# set is `nothing` there. A node whose children only the run time knows, because a type is not
+# concrete, is pushed as a leaf of a type that is not known, and the walk dispatches on it. An `Expr`
+# pushed instead ends the walk: `_like` where it raises, or `stop` at a branch beside a further set of
+# `nothing`, where `stop` is not `nothing`. Returns whether the walk ended. The types are held in
+# `Vector{Any}`s and not specialised on, since this runs once per generated body.
+function _tree_nodes!(nodes::Vector{Any}, @nospecialize(X::Type), Rs::Vector{Any}, x,
+        rs::Vector{Any}, stop)
+    if !(isconcretetype(X) && X <: _Branch)
+        push!(nodes, (x, rs, isconcretetype(X), any(R -> R === Nothing, Rs)))
+        return false
+    end
+    if X <: NetworkParameters
+        X, x = fieldtype(X, 1), :(getfield($x, 1))
+    end
+    Ls = Any[_like_type(X, R) for R in Rs]
+    if any(ismissing, Ls)
+        push!(nodes, (x, rs, false, false))
+        return false
+    end
+    j = findfirst(isnothing, Ls)
+    if j !== nothing
+        push!(nodes, :(_like($x, $(rs[j]))))
+        return true
+    end
+    if stop !== nothing && any(L -> L === Nothing, Ls)
+        push!(nodes, stop)
+        return true
+    end
+    n = _children_arity(X, Tuple(Ls))
+    ks = _branch_keys(X)
+    for j in eachindex(Ls)
+        _check_child_keys(ks, Ls[j], j)
+    end
+    ls = Any[R <: NetworkParameters ? :(getfield($r, 1)) : r for (R, r) in zip(Rs, rs)]
+    for i in 1:n
+        Cs = Any[L === Nothing ? Nothing : fieldtype(L, i) for L in Ls]
+        cs = Any[L === Nothing ? :nothing : :(getfield($l, $i)) for (L, l) in zip(Ls, ls)]
+        _tree_nodes!(nodes, fieldtype(X, i), Cs, :(getfield($x, $i)), cs, stop) &&
+            return true
+    end
+    false
+end
+
+# The nodes of a generated walk of `ps` and the further sets `rest`, read from its arguments
+function _tree_nodes(@nospecialize(ps::Type), @nospecialize(rest::Tuple), stop)
+    nodes = Any[]
+    _tree_nodes!(
+        nodes, ps, Any[rest...], :ps, Any[:(getfield(rest, $j)) for j in eachindex(rest)],
+        stop)
+    nodes
+end
+
+# The body of an in-place walk. Nothing where a further set is `nothing`; `f(x, rs...)` at a leaf of a
+# known type where `direct`; and `walk(f, x, rs...)` at every other node, which at a leaf is the leaf
+# method of `walk`. A leaf method between the body and `f` would be on the inference stack twice
+# when the walk runs inside the function of another one, both times called from the same generated
+# method, and inference would widen the second; so a walk whose leaf method is only a call of `f`
+# calls `f` directly.
+function _foreach_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
+        @nospecialize(rest::Tuple))
+    body = Any[Expr(:meta, :inline)]
+    for n in _tree_nodes(ps, rest, nothing)
+        if n isa Expr
+            push!(body, n)
+        else
+            x, rs, leaf, skip = n
+            skip ||
+                push!(body, direct && leaf ? :(f($x, $(rs...))) : :($walk(f, $x, $(rs...))))
+        end
+    end
+    Expr(:block, body..., :(return nothing))
+end
+
+# The body of a fold, from `init` and in order: `op(acc, x, rs...)` at a leaf of a known type where
+# `direct`, for the reason of `_foreach_body`, and `walk(op, acc, x, rs...)` at every other node.
+function _fold_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
+        @nospecialize(rest::Tuple))
+    body = Any[Expr(:meta, :inline)]
+    acc = :init
+    for n in _tree_nodes(ps, rest, :(_no_folded_skip_error()))
+        if n isa Expr
+            push!(body, n)
+        else
+            x, rs, leaf, _ = n
+            next = gensym(:acc)
+            call = direct && leaf ? :(op($acc, $x, $(rs...))) :
+                   :($walk(op, $acc, $x, $(rs...)))
+            push!(body, :($next = $call))
+            acc = next
+        end
+    end
+    Expr(:block, body..., :(return $acc))
+end
+
+# A generator runs when a walk first meets a tree type, so its helpers are compiled into the package
+# image rather than at that first call.
+precompile(_foreach_body, (Symbol, Bool, Type, Tuple))
+precompile(_fold_body, (Symbol, Bool, Type, Tuple))
 
 """
     mapparameters(f, ps)
@@ -125,15 +247,14 @@ A branch or leaf of `rest` that is `nothing` **skips** that position entirely �
 there. This is what lets a tree that is missing the entries of a frozen or non-trainable layer be
 walked against the parameters it belongs to, without having to fill the holes in first.
 
-Allocation-free, at any width of branch, any depth of nesting and any number of `rest`: the branches are
-indexed in place rather than taken apart, so nothing is materialised on the way in.
+Allocation-free, at any width of branch, any depth of nesting and any number of `rest`, and inside the
+function of another walk: the whole tree is one generated body, which indexes the branches in place
+rather than taking them apart, so nothing is materialised on the way in.
 
 See [`mapparameters!`](@ref) for the in-place variant that returns its destination.
 """
-@inline function foreachparameters(f, ps::Union{NetworkParameters, NamedTuple, Tuple},
-        rest::Vararg{Any, N}) where {N}
-    b = _branch(ps)
-    _unrolled_foreach(_FixFirst(foreachparameters, f), b, map(Base.Fix1(_like, b), rest)...)
+@generated function foreachparameters(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _foreach_body(:foreachparameters, true, ps, rest)
 end
 
 @inline function foreachparameters(f, x, rest::Vararg{Any, N}) where {N}
@@ -170,10 +291,8 @@ into the leaf. Allocation-free on the same terms.
     dest
 end
 
-@inline function _foreach_storage(f, ps::Union{NetworkParameters, NamedTuple, Tuple},
-        rest::Vararg{Any, N}) where {N}
-    b = _branch(ps)
-    _unrolled_foreach(_FixFirst(_foreach_storage, f), b, map(Base.Fix1(_like, b), rest)...)
+@generated function _foreach_storage(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _foreach_body(:_foreach_storage, false, ps, rest)
 end
 
 @inline function _foreach_storage(f, x, rest::Vararg{Any, N}) where {N}
@@ -209,8 +328,9 @@ it is given, so a set left out would make the result a partial sum without sayin
 place of a single *leaf* still reaches `op`, exactly as it reaches `f` in [`mapparameters`](@ref) —
 what a missing leaf contributes to the sum is the caller's to decide, and only the caller's.
 
-Allocation-free at any width, depth and arity — **provided a caller that hands `op` on through a
-function of its own annotates it `::F where {F}` there.** Julia does not specialise on a function
+Allocation-free at any width, depth and arity, and inside the function of another walk —
+**provided a caller that hands `op` on through a function of its own annotates it `::F where {F}`
+there.** Julia does not specialise on a function
 argument it never sees called, so without that annotation `op` arrives boxed and every leaf costs a
 dynamic dispatch. A closure that *captures* a function needs nothing, a closure being its own type,
 which is why `(acc, x) -> acc + abs2(f(x))` is the way to fold a function of each leaf and no second
@@ -243,12 +363,8 @@ foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
 32.0
 ```
 """
-@inline function foldparameters(op, init, ps::Union{NetworkParameters, NamedTuple, Tuple},
-        rest::Vararg{Any, N}) where {N}
-    b = _branch(ps)
-    rs = map(Base.Fix1(_like, b), rest)
-    any(isnothing, rs) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldparameters, op), init, b, rs...)
+@generated function foldparameters(op, init, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _fold_body(:foldparameters, true, ps, rest)
 end
 
 @inline foldparameters(op, init, x, rest::Vararg{Any, N}) where {N} = op(init, x, rest...)
@@ -281,12 +397,8 @@ foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, a, b)
 11.0
 ```
 """
-@inline function foldstorage(op, init, ps::Union{NetworkParameters, NamedTuple, Tuple},
-        rest::Vararg{Any, N}) where {N}
-    b = _branch(ps)
-    rs = map(Base.Fix1(_like, b), rest)
-    any(isnothing, rs) && _no_folded_skip_error()
-    _unrolled_foldl(_FixFirst(foldstorage, op), init, b, rs...)
+@generated function foldstorage(op, init, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _fold_body(:foldstorage, false, ps, rest)
 end
 
 @inline function foldstorage(op, init, x, rest::Vararg{Any, N}) where {N}
@@ -311,10 +423,8 @@ end
 @inline _as_tuple(x::Tuple) = x
 @inline _as_tuple(x::Nothing) = nothing
 
-# The branch of `ps`, and a further set `x` as a branch of the same kind: keyed beside a keyed
-# branch, positional beside a positional one.
-@inline _branch(ps::NetworkParameters) = params(ps)
-@inline _branch(ps) = ps
+# A further set `x` as a branch of the same kind as the one beside it: keyed beside a keyed branch,
+# positional beside a positional one. A generated walk calls it only where it raises.
 @inline _like(::NamedTuple, x) = _as_namedtuple(x)
 @inline _like(::Tuple, x) = _as_tuple(x)
 

@@ -16,13 +16,14 @@ MNIST transformer in GMLDatasets.jl.
 
 ## The walk across the children of a branch
 
-A walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`, `Tuple` or a leaf. A walk
-*across* the children of one branch is one call of a primitive of `src/unrolled.jl`: a map, a left
-fold, and a map that carries a state from child to child. Each primitive is a generated body that
-reads child `i` with `getfield` at the literal index `i`. A foreach is the map, called for its effect.
-A walk binds its own function with the internal `_FixFirst` and not with `Base.Fix1`, because a
-primitive passes one child of each set, and `Base.Fix1` takes only one further argument on Julia
-1.11.
+The maps, the layout and the flattening walk down the tree by dispatch on `NetworkParameters`,
+`NamedTuple`, `Tuple` or a leaf. They walk *across* the children of one branch with one call of a
+primitive of `src/unrolled.jl`: a map, a left fold, and a map that carries a state from child to
+child. Each primitive is a generated body that reads child `i` with `getfield` at the literal index
+`i`. A foreach is the map, called for its effect. Such a walk binds its own function with the
+internal `_FixFirst` and not with `Base.Fix1`, because a primitive passes one child of each set, and
+`Base.Fix1` takes only one further argument on Julia 1.11. The in-place walks and the folds take
+another form, described in the next section.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`
 children costs `k` specialisations whose argument types are each `O(k)` long. The 0.2.2 entry of
@@ -48,6 +49,51 @@ sides. The walks of this package do not annotate `op`, because the boxing is the
 `tailfold` column of `scripts/wide_branch_cost.jl` reproduces the effect: on a branch of
 369 children a chain takes 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3, where the
 written-out fold takes 2.11, 0.80 and 0.47 s.
+
+## The in-place walks and the folds are one body per tree
+
+`foreachparameters`, `mapparameters!`, `mapstorage!`, `foldparameters` and `foldstorage` read the
+whole tree off the types of their arguments when they are generated, and each is one body with one
+call per leaf. The key and arity checks are the generator's, as in the primitives.
+
+**Why not a walk that recurses through its own methods.** An optimizer that steps each leaf with its
+own method runs a walk in the function of another one. A walk that recurses through its own methods
+then puts the same method on the inference stack twice, the second time with a function argument
+nested one level deeper, such as `_FixFirst{typeof(foreachparameters), Step{…}}`. Inference reads
+that as recursion that might not end and widens the inner call, so the inner walk dispatches
+dynamically and boxes its function at every leaf. NNP 0.5.1 walks that way. With an inner walk on a
+one-leaf set of each of the 3 leaves of a set, its `foreachparameters` in `foreachparameters` and
+`mapstorage!` in `mapstorage!` allocate 96 B per step, or 192 and 240 B with five captured `Float32`
+and `Float64` coefficients, and each of its folds in itself 144 B. The generated walks allocate
+nothing in all these cases. Julia 1.13.1, `julia --project=. scripts/nested_walk_cost.jl nested`.
+
+**Why `f` at a leaf and not the leaf method.** A generated body that calls the leaf method of
+`foreachparameters` or of `foldparameters` at each leaf puts that method on the inference stack
+twice as well, both times called from the same generated method. In the per-leaf `Adam` step of
+GeometricOptimizers, inference widens the second, and that step boxes its function, 48 B per leaf,
+in `Float64` only. So these two walks call `f` or `op` at a leaf directly. The storage walks still call their leaf method, which decides at run time with
+`freeparameters` whether a leaf is its own storage.
+
+**What it costs.** The table compares NNP 0.5.1 with the generated walks: the first call in a cold
+process, on a set of 3 leaves of depth 2, 64 leaves of depth 4, and 369 leaves of depth 1, at arity
+two. Julia 1.13.1, `scripts/nested_walk_cost.jl <walk> <shape>`, one process per row, load average
+about 10.
+
+| | 3 leaves | 64 leaves | 369 leaves |
+|:--|--:|--:|--:|
+| `mapparameters!`, NNP 0.5.1 | 0.06 s | 0.09 s | 1.11 s |
+| `mapparameters!`, generated | 0.03 s | 0.16 s | 1.24 s |
+| `mapstorage!`, NNP 0.5.1 | 0.07 s | 0.09 s | 1.09 s |
+| `mapstorage!`, generated | 0.04 s | 0.16 s | 1.21 s |
+| `foldparameters`, NNP 0.5.1 | 0.06 s | 0.06 s | 0.28 s |
+| `foldparameters`, generated | 0.05 s | 0.06 s | 0.11 s |
+| `foldstorage`, NNP 0.5.1 | 0.07 s | 0.07 s | 0.32 s |
+| `foldstorage`, generated | 0.05 s | 0.07 s | 0.15 s |
+
+The in-place walks compile about 0.1 s slower on the two larger sets, and faster on the small one.
+The folds compile as fast or faster. One call takes the same time within the resolution of
+the clock, and allocates nothing on either side. The generators' helpers are precompiled, since a
+generator runs at the first call of a walk on a tree type.
 
 ## Two walks that take another form
 
