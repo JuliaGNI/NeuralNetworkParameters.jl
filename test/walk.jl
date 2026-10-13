@@ -398,6 +398,31 @@ end
     @test params(dest) == (a = [11.0], b = [2.0])
 end
 
+# The same for a further set: the walk goes into its branch at run time, beside the branch of the first
+# set whose type it knows.
+@testset "a walk goes into a branch of a further set behind a field type that is not concrete" begin
+    loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((
+        (W = [1.0, 2.0], b = [3.0]), [4.0]))
+    zeroed() = (L1 = (W = [0.0, 0.0], b = [0.0]), L2 = [0.0])
+    added = (L1 = (W = [1.0, 2.0], b = [3.0]), L2 = [4.0])
+    dest = zeroed()
+    foreachparameters((d, s) -> (d .+= s; nothing), dest, loose)
+    @test dest == added
+    dest = zeroed()
+    mapstorage!((d, s) -> (d .+= s; nothing), dest, loose)
+    @test dest == added
+    @test foldparameters((acc, x, y) -> acc + sum(x .* y), 0.0, added, loose) == 30.0
+    @test foldstorage((acc, x, y) -> acc + sum(x .* y), 0.0, added, loose) == 30.0
+end
+
+@testset "a further set of the other kind of branch raises" begin
+    keyed, positional = (a = [1.0],), ([1.0],)
+    @test_throws MethodError foreachparameters((_, _) -> nothing, keyed, positional)
+    @test_throws MethodError mapstorage!((_, _) -> nothing, keyed, positional)
+    @test_throws MethodError foldparameters((acc, _, _) -> acc, 0.0, keyed, positional)
+    @test_throws MethodError foldstorage((acc, _, _) -> acc, 0.0, keyed, positional)
+end
+
 @testset "a mapped tree takes its element type from what the map returned" begin
     @test mapstorage(x -> Float32.(x), ps) isa NetworkParameters{Float32}
     @test mapparameters(x -> Float32.(x), ps) isa NetworkParameters{Float32}
