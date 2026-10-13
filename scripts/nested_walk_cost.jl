@@ -7,10 +7,12 @@
 #     julia --project=. scripts/nested_walk_cost.jl wide
 #     julia --project=. scripts/nested_walk_cost.jl <walk> <shape>
 #
-# `nested` prints the allocations of each in-place walk and fold when its function runs a second walk
-# of the same kind on a one-leaf set, the way an optimizer that steps each leaf with its own method
-# does. `wide` does the same with an inner walk of four sets inside an outer walk of two, as
-# `KNOWN_ISSUES.md` K11 cites. `<walk>` is one of `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
+# `nested` prints the allocations of each in-place walk and fold when its function runs a second
+# walk of the same kind on a one-leaf set, the way an optimizer that steps each leaf with its own
+# method does. `wide` does the same with an inner walk of four sets inside an outer walk of two, as
+# `KNOWN_ISSUES.md` K11 cites.
+#
+# `<walk>` is one of `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
 # `small` (3 leaves, depth 2), `deep` (64 leaves, depth 4) and `flat` (369 leaves, depth 1). That mode
 # prints the first-call time of a cold process, which is compilation and a negligible run, the
 # allocations of the second call, and the fastest of 1000 calls.
