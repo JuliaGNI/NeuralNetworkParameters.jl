@@ -69,10 +69,13 @@ nothing in all these cases. Julia 1.13.1, `julia --project=. scripts/nested_walk
 
 **Why `f` at a leaf and not the leaf method.** A generated body that calls the leaf method of
 `foreachparameters` or of `foldparameters` at each leaf puts that method on the inference stack
-twice as well, both times called from the same generated method. In the per-leaf `Adam` step of
-GeometricOptimizers, inference widens the second, and that step boxes its function, 48 B per leaf,
-in `Float64` only. So these two walks call `f` or `op` at a leaf directly. The storage walks still call their leaf method, which decides at run time with
-`freeparameters` whether a leaf is its own storage.
+twice as well, both times called from the same generated method. Where the inner walk takes more
+sets than the outer one, and at least four, inference shortens the longer argument list of the
+second call to a `Vararg` and does not specialise it on its function. The per-leaf `Adam` step of
+GeometricOptimizers walks six sets inside a walk of five, and then boxes its function at every leaf,
+32 B in `Float32` and 48 B in `Float64`. So these two walks call `f` or `op` at a leaf directly, and
+`test/walk.jl` runs a walk of four sets inside a walk of two for each. The storage walks call their
+leaf method, which decides at run time with `freeparameters` whether a leaf is its own storage.
 
 **What it costs.** The table compares NNP 0.5.1 with the generated walks: the first call in a cold
 process, on a set of 3 leaves of depth 2, 64 leaves of depth 4, and 369 leaves of depth 1, at arity

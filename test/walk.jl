@@ -313,6 +313,53 @@ end
     @test S.L1.W.B ≈ A + R.L1.W.B
 end
 
+# The inner walk takes four sets where the outer one takes two, as the `Adam` step of a leaf walks six
+# sets inside a walk of five. A leaf method of the walk between the generated body and `f` would be
+# inferred a second time from the same body, with a longer argument list, which inference shortens to
+# a `Vararg` and then calls without specialising on `f`. These allocate at every leaf unless
+# `foreachparameters` and `foldparameters` call `f` and `op` at a leaf directly.
+function _scaled_axpy3(α, β, γ, δ, ε)
+    (d, a, b, c) -> (d .+= (α * β * γ * δ * ε) .* a .* b .* c; nothing)
+end
+function _product_leaf(acc, a, b, c, d)
+    for i in eachindex(a, b, c, d)
+        acc += a[i] * b[i] * c[i] * d[i]
+    end
+    acc
+end
+function _nested_foreach_wider!(X, Y, c)
+    foreachparameters(X, Y) do x, y
+        mapparameters!(
+            _InnerStep(_scaled_axpy3(c, c, c, c, c)), _one_leaf(x), _one_leaf(y),
+            _one_leaf(y), _one_leaf(y))
+        nothing
+    end
+end
+function _nested_fold_wider(X, Y, init)
+    foldparameters(init, X, Y) do acc, x, y
+        foldparameters(
+            _InnerStep(_product_leaf), acc, _one_leaf(x), _one_leaf(y), _one_leaf(y), _one_leaf(y))
+    end
+end
+
+@testset "a walk of four sets in the function of a walk of two allocates nothing ($T)" for T in (
+    Float32, Float64)
+    dense() = NetworkParameters((
+        L1 = (W = _entries(T, 3, 2), b = _entries(T, 3)), L2 = (W = _entries(T, 1, 3),)))
+    X, Y = dense(), dense()
+    @test _nested_allocs(_nested_foreach_wider!, X, Y, one(T)) == 0
+    @test _nested_allocs(_nested_fold_wider, X, Y, zero(T)) == 0
+
+    # and the walks still do the work: one more step adds `Y .^ 3` to `X`, and the fold is the sum
+    # of `X .* Y .^ 3`
+    W = copy(X.L1.W)
+    _nested_foreach_wider!(X, Y, one(T))
+    @test X.L1.W ≈ W + Y.L1.W .^ 3
+    @test _nested_fold_wider(X, Y, zero(T)) ≈
+          sum(X.L1.W .* Y.L1.W .^ 3) + sum(X.L1.b .* Y.L1.b .^ 3) +
+          sum(X.L2.W .* Y.L2.W .^ 3)
+end
+
 # The keys and widths of the whole tree are checked when the walk is generated, so a mismatch below
 # the top raises before `f` runs on any leaf, and a walk that raises has changed nothing.
 @testset "a mismatch below the top of the tree raises before any leaf is walked" begin
@@ -336,6 +383,19 @@ end
     @test foldparameters((acc, x) -> acc + sum(x), 0.0, loose) == 10.0
     @test foldparameters((acc, x, y) -> acc + sum(x) * sum(y), 0.0, loose, loose) ==
           9.0 + 9.0 + 16.0
+end
+
+# A leaf of a further set whose field type is not concrete can hold a `nothing` that only the run time
+# knows, and the in-place walks skip it there as they skip a `nothing` whose type they know.
+@testset "a nothing behind a field type that is not concrete is skipped" begin
+    holes = NamedTuple{(:a, :b), Tuple{Any, Union{Nothing, Vector{Float64}}}}((
+        [10.0], nothing))
+    dest = (a = [1.0], b = [2.0])
+    foreachparameters((d, s) -> (d .+= s; nothing), dest, holes)
+    @test dest == (a = [11.0], b = [2.0])
+    dest = NetworkParameters((a = [1.0], b = [2.0]))
+    mapparameters!((d, s) -> (d .+= s; nothing), dest, NetworkParameters(holes))
+    @test params(dest) == (a = [11.0], b = [2.0])
 end
 
 @testset "a mapped tree takes its element type from what the map returned" begin

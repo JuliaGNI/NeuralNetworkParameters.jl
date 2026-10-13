@@ -28,8 +28,9 @@ end
 
 # The nodes of a whole-tree walk, in the order `flatten` writes the leaves, pushed to `nodes`. A node
 # is `(x, rs, leaf, skip)`: the expression that reads a leaf of the first set, those that read the
-# node beside it in each further set, whether its type is known to be a leaf's, and whether a further
-# set is `nothing` there. A node whose children only the run time knows, because a type is not
+# node beside it in each further set, whether its type is known to be a leaf's and the type of each
+# node beside it is concrete, so that none can be a `nothing` the type does not show, and whether a
+# further set is `nothing` there. A node whose children only the run time knows, because a type is not
 # concrete, is pushed as a leaf of a type that is not known, and the walk dispatches on it. An `Expr`
 # pushed instead ends the walk: `_like` where it raises, or `stop` at a branch beside a further set of
 # `nothing`, where `stop` is not `nothing`. Returns whether the walk ended. The types are held in
@@ -37,7 +38,9 @@ end
 function _tree_nodes!(nodes::Vector{Any}, @nospecialize(X::Type), Rs::Vector{Any}, x,
         rs::Vector{Any}, stop)
     if !(isconcretetype(X) && X <: _Branch)
-        push!(nodes, (x, rs, isconcretetype(X), any(R -> R === Nothing, Rs)))
+        push!(nodes,
+            (x, rs, isconcretetype(X) && all(isconcretetype, Rs),
+                any(R -> R === Nothing, Rs)))
         return false
     end
     if X <: NetworkParameters
