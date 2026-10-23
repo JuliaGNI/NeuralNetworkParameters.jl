@@ -8,18 +8,21 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 ### Changed
 
-- **The `[compat]` floor is raised to `ChainRulesCore = "1.25.1"`**, so that the floors resolve
-  and the suite passes there. With `"1"`, the Downgrade job pins ChainRulesCore 1.0.0, which the
-  `ZygoteRules = "0.2.7"` floor refuses (it needs 1.9 or later), and no environment resolves. At
+- **The `[compat]` floor is raised to `ChainRulesCore = "1.25.1"`**, the lowest that admits
+  Zygote 0.7, so that the floors resolve and the derivative tests pass there. With `"1"`, the
+  Downgrade job pins ChainRulesCore 1.0.0, which the `ZygoteRules = "0.2.7"` floor refuses (it
+  needs 1.9 or later), and no environment resolves. At
   1.9.0 the environment resolves, but only with ChainRules 1.12 and Zygote 0.6.40, which does not
   run on Julia 1.11: the derivative tests give 106 errors inside Zygote and 2 failures. At 1.15.3
-  and 1.20.0 the resolver takes Zygote 0.6.77, and the suite passes except one assertion in
+  and 1.20.0 the resolver takes Zygote 0.6.77, and the derivative tests fail one assertion in
   `Float32` and `Float64`: the sum of two Zygote gradients of `sum(p.a)` holds a `Fill`, where
-  Zygote 0.7 gives a `Vector`. Zygote 0.7 needs ChainRulesCore 1.25.1. Every testset other than
-  the derivatives passes at all three floors, 1.9.0 included. Measured with every direct
-  dependency at its floor and the test dependencies resolved against them, on Julia 1.11.9. The
-  floor of 1.25.1 itself was not measured locally, because an artifact of its environment could
-  not be downloaded; the Downgrade job runs it.
+  Zygote 0.7 gives a `Vector`. The eleven testsets that run before the derivatives pass at all
+  three floors; the HDF5 and GeometricBase testsets run after them and are not reached. Zygote
+  0.7 needs ChainRulesCore 1.25.1. At that floor the environment resolves with ChainRules 1.74.2
+  and Zygote 0.7.14, and the derivative tests pass 695/695 and the GeometricBase tests 13/13. The
+  other testsets were not run at 1.25.1, because an artifact of its environment could not be
+  downloaded; the Downgrade job runs them. Measured with every direct dependency at its floor and
+  the test dependencies resolved against them, on Julia 1.11.9.
 
 ## [0.5.3] — 2026-10-23
 
