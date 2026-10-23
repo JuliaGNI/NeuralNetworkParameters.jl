@@ -4,15 +4,12 @@
 # puts the result back in the same shape. The walk is written once, over the
 # `freeparameters`/`rebuild` protocol, so it never needs to know which structured types exist.
 #
-# `mapparameters`, the in-place walks and the folds read the whole tree off the types of their
-# arguments and are one generated body each, with one call per leaf and no recursion at run time. A
-# walk often runs inside the function of another walk, such as an optimizer step or the building of a
-# cache per leaf, and inference widens the types of a method that it finds twice on its stack with
-# more deeply nested arguments; a walk that recurses through its own methods there dispatches
-# dynamically, allocates at every leaf, and a map returns a type that is not concrete. `mapstorage`
-# builds a new tree as well: its walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`,
-# `Tuple` or a leaf, and its walk across the children of one branch is one call of a primitive of
-# `unrolled.jl`.
+# Every walk reads the whole tree off the types of its arguments and is one generated body, with one
+# call per leaf and no recursion at run time. A walk often runs inside the function of another walk,
+# such as an optimizer step or the building of a cache per leaf, and inference widens the types of a
+# method that it finds twice on its stack with more deeply nested arguments; a walk that recurses
+# through its own methods there dispatches dynamically, allocates at every leaf, and a map returns a
+# type that is not concrete.
 
 const _Branch = Union{NetworkParameters, NamedTuple, Tuple}
 
@@ -28,11 +25,11 @@ function _like_type(@nospecialize(B::Type), @nospecialize(R::Type))
     nothing
 end
 
-# `mapparameters` maps across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children with `Base.map`,
-# which compiles faster than a body written out per child and returns a container whose type is not
-# inferred, and `mapstorage` does so through `_map_zip`. The out-of-place walks run once per cache or
-# per device move, not per iteration, so for them the compile time matters more. 32 is the width to
-# which `Base` unrolls a tuple itself.
+# `mapparameters` and `mapstorage` map across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children
+# with `Base.map`, which compiles faster than a body written out per child and returns a container
+# whose type is not inferred. The out-of-place walks run once per cache or per device move, not per
+# iteration, so for them the compile time matters more. 32 is the width to which `Base` unrolls a tuple
+# itself.
 const _WRITE_OUT_MAX_CHILDREN = 32
 
 # The nodes of a whole-tree walk, in the order `flatten` writes the leaves, pushed to `nodes`. A node
@@ -46,7 +43,7 @@ const _WRITE_OUT_MAX_CHILDREN = 32
 # `nothing`.
 #
 # An `out_of_place` walk checks the keys of a branch before `stop` and its number of children, as
-# `mapparameters` reports two keyed branches of different widths by their keys, and pushes a branch of
+# the maps report two keyed branches of different widths by their keys, and pushes a branch of
 # more than `_WRITE_OUT_MAX_CHILDREN` children whole, after these checks. The in-place walks and the
 # folds report the number of children first, as the primitives do.
 #
@@ -158,18 +155,19 @@ function _fold_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
     Expr(:block, body..., :(return $acc))
 end
 
-# The body of `mapparameters`: the value of each node, then the tree of these values in the shape of
-# `ps`. The value is `f(x, rs...)` at a leaf of a known type, for the reason of `_foreach_body`,
-# `Base.map` of the walk across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children, and
-# `mapparameters(f, x, rs...)` at every other node. A further set that is `nothing` beside a branch
-# raises, since a new tree has nothing to put there; where the walk raises, it calls `f` on no leaf.
-function _map_body(@nospecialize(ps::Type), @nospecialize(rest::Tuple))
+# The body of a map: the value of each node, then the tree of these values in the shape of `ps`. The
+# value is `f(x, rs...)` at a leaf of a known type where `direct`, for the reason of `_foreach_body`,
+# `Base.map` of `walk` across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children, and
+# `walk(f, x, rs...)` at every other node. A further set that is `nothing` beside a branch raises,
+# since a new tree has nothing to put there; where the walk raises, it calls `f` on no leaf.
+function _map_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
+        @nospecialize(rest::Tuple))
     nodes, shape = _tree_nodes(ps, rest, :(_no_skipped_set_error()), true)
     shape === nothing && return Expr(:block, Expr(:meta, :inline), last(nodes))
     body = Any[Expr(:meta, :inline)]
     for (k, (x, rs, leaf, _, wide)) in enumerate(nodes)
-        value = wide ? :(map(_FixFirst(mapparameters, f), $x, $(rs...))) :
-                leaf ? :(f($x, $(rs...))) : :(mapparameters(f, $x, $(rs...)))
+        value = wide ? :(map(_FixFirst($walk, f), $x, $(rs...))) :
+                direct && leaf ? :(f($x, $(rs...))) : :($walk(f, $x, $(rs...)))
         push!(body, :($(_node_name(k)) = $value))
     end
     Expr(:block, body..., :(return $shape))
@@ -179,7 +177,7 @@ end
 # image rather than at that first call.
 precompile(_foreach_body, (Symbol, Bool, Type, Tuple))
 precompile(_fold_body, (Symbol, Bool, Type, Tuple))
-precompile(_map_body, (Type, Tuple))
+precompile(_map_body, (Symbol, Bool, Type, Tuple))
 
 """
     mapparameters(f, ps)
@@ -231,7 +229,7 @@ mapparameters(+, a, c).L1.b
 ```
 """
 @generated function mapparameters(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
-    _map_body(ps, rest)
+    _map_body(:mapparameters, true, ps, rest)
 end
 
 @inline mapparameters(f, x, rest::Vararg{Any, N}) where {N} = f(x, rest...)
@@ -267,17 +265,9 @@ mapstorage(x -> x ./ 2, ps).L1.W
  1.5  2.0
 ```
 """
-@inline mapstorage(f, ps::NetworkParameters, rest::Vararg{
-    Any, N}) where {N} = NetworkParameters(mapstorage(f, params(ps), map(_as_namedtuple, rest)...))
-
-@inline function mapstorage(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
-    nts = map(_as_namedtuple, rest)
-    _check_keys(keys(ps), nts)
-    _rewrap_children(ps, _map_zip(mapstorage, f, ps, nts...))
+@generated function mapstorage(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _map_body(:mapstorage, false, ps, rest)
 end
-
-@inline mapstorage(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
-    mapstorage, f, ps, map(_as_tuple, rest)...)
 
 @inline function mapstorage(f, x, rest::Vararg{Any, N}) where {N}
     s = freeparameters(x)
@@ -489,32 +479,10 @@ end
 @inline _leaf_storage(::Nothing) = nothing
 @inline _leaf_storage(x) = freeparameters(x)
 
-# The walk of `mapstorage` across the children of a branch: the unrolled map across a branch of at
-# most `_WRITE_OUT_MAX_CHILDREN` children, and `Base.map` across a wider one.
-@inline function _map_zip(recurse, f, xs, rest::Vararg{Any, N}) where {N}
-    # An out-of-place walk has nothing to put where a set is `nothing`.
-    any(isnothing, rest) && _no_skipped_set_error()
-    _children_arity(typeof(xs), map(typeof, rest))
-    g = _FixFirst(recurse, f)
-    fieldcount(typeof(xs)) > _WRITE_OUT_MAX_CHILDREN ? map(g, xs, rest...) :
-    _unrolled_map(g, xs, rest...)
-end
-
 @noinline _no_skipped_set_error() = throw(ArgumentError(string(
     "`mapparameters` and `mapstorage` build a new set and so have nothing to put where a `nothing` ",
     "stands; use `mapparameters!`, `mapstorage!` or `foreachparameters`, which skip that position.")))
 
-# The children of a branch in the branch's own shape. `Base.map` over a `NamedTuple` returns one keyed
-# already.
-@inline _rewrap_children(::NamedTuple{Keys}, children::NamedTuple{Keys}) where {Keys} = children
+# The `Tuple` of the children of a branch in the branch's own shape
 @inline _rewrap_children(::NamedTuple{Keys}, children) where {Keys} = NamedTuple{Keys}(children)
 @inline _rewrap_children(::Tuple, children) = children
-
-@inline _check_keys(::Tuple, ::Tuple{}) = nothing
-@inline function _check_keys(ks::Tuple, nts::Tuple)
-    other = first(nts)
-    if other !== nothing && keys(other) != ks
-        throw(ArgumentError(string("parameter sets have different keys: ", ks, " and ", keys(other))))
-    end
-    _check_keys(ks, Base.tail(nts))
-end

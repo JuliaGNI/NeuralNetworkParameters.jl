@@ -14,7 +14,7 @@
 # `KNOWN_ISSUES.md` K11 cites. `nestedmap` prints whether the result type of `mapparameters` is
 # inferred concretely when its function runs a second `mapparameters` on a set of one leaf or of two
 # leaves, or of one leaf at arity two, the way an optimizer builds its cache per leaf, and the same
-# for `mapstorage` in `mapstorage`, as `KNOWN_ISSUES.md` K12 cites.
+# for `mapstorage` in `mapstorage`.
 #
 # `<walk>` is one of `map`, `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
 # `small` (3 leaves, depth 2), `deep` (64 leaves, depth 4) and `flat` (369 leaves, depth 1). That mode

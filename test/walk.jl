@@ -431,6 +431,75 @@ end
     @test mapped.M == [2.0]
 end
 
+# A map of storage inside the function of another one, on the sets of the maps above. The result type
+# is inferred as well.
+function _stored_one_leaf(X)
+    mapstorage(x -> mapstorage(_InnerStep(_double), _one_leaf(x)), X)
+end
+function _stored_two_leaves(X)
+    mapstorage(x -> mapstorage(_InnerStep(_double), _two_leaves(x)), X)
+end
+function _stored_zipped(X, Y)
+    mapstorage((x, y) -> mapstorage(_InnerStep(+), _one_leaf(x), _one_leaf(y)), X, Y)
+end
+
+@testset "a mapstorage in the function of another mapstorage infers its result ($T)" for T in (
+    Float32, Float64)
+    X = NetworkParameters((
+        L1 = (W = _entries(T, 3, 2), b = _entries(T, 3)), L2 = (W = _entries(T, 1, 3),)))
+    @test @inferred(_stored_one_leaf(X)) isa NetworkParameters{T}
+    @test @inferred(_stored_two_leaves(X)) isa NetworkParameters{T}
+    @test @inferred(_stored_zipped(X, X)) isa NetworkParameters{T}
+
+    # and the maps still do the work
+    one_leaf = _stored_one_leaf(X)
+    @test one_leaf.L1.W.leaf == 2 * X.L1.W
+    @test one_leaf.L2.W.leaf == 2 * X.L2.W
+    two_leaves = _stored_two_leaves(X)
+    @test two_leaves.L1.b.a == 2 * X.L1.b
+    @test two_leaves.L1.b.b.c == 2 * X.L1.b
+    zipped = _stored_zipped(X, X)
+    @test zipped.L1.W.leaf == 2 * X.L1.W
+end
+
+# `mapstorage` keeps the contract of `mapparameters`: a mismatch below the top raises before `f` runs;
+# at one branch, a branch of the other kind raises first, then different keys, then a set of `nothing`,
+# then a different number of children; a field type that is not concrete is walked into at run time;
+# and a branch of more than 32 children below the top is mapped across at run time.
+@testset "the generated mapstorage keeps the contract of the map" begin
+    calls = Ref(0)
+    counted = (x, ys...) -> (calls[] += 1; x)
+    a = (L1 = (W = [1.0],), L2 = (a = [1.0], b = [2.0]))
+    @test_throws "different keys" mapstorage(counted, a,
+        (L1 = (W = [1.0],), L2 = (b = [1.0], a = [2.0])))
+    @test_throws "different keys" mapstorage(counted, a, (
+        L1 = (W = [1.0],), L2 = (a = [1.0],)))
+    @test_throws "same number of children" mapstorage(
+        counted, (L1 = [1.0], L2 = ([1.0], [2.0])),
+        (L1 = [1.0], L2 = ([1.0],)))
+    @test_throws "nothing to put" mapstorage(counted, a, (
+        L1 = (W = [1.0],), L2 = nothing))
+    @test calls[] == 0
+
+    @test_throws MethodError mapstorage(counted, (a = [1.0],), ([1.0],))
+    @test_throws MethodError mapstorage(counted, ([1.0],), (a = [1.0],))
+    @test_throws "different keys" mapstorage(counted, a, (L1 = (W = [1.0],),), nothing)
+    @test_throws "nothing to put" mapstorage(counted, ([1.0], [2.0]), ([1.0],), nothing)
+    @test calls[] == 0
+
+    loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((
+        (W = [1.0, 2.0], b = [3.0]), [4.0]))
+    @test mapstorage(x -> 2x, loose) == (L1 = (W = [2.0, 4.0], b = [6.0]), L2 = [8.0])
+
+    wide = NamedTuple{ntuple(i -> Symbol(:p, i), 33)}(ntuple(i -> [Float64(i)], 33))
+    mapped = mapstorage(+, NetworkParameters((L = NetworkParameters(wide), M = [1.0])),
+        (L = wide, M = [1.0]))
+    @test mapped isa NetworkParameters
+    @test mapped.L isa NetworkParameters
+    @test mapped.L.p33 == [66.0]
+    @test mapped.M == [2.0]
+end
+
 # The keys and widths of the whole tree are checked when the walk is generated, so a mismatch below
 # the top raises before `f` runs on any leaf, and a walk that raises has changed nothing.
 @testset "a mismatch below the top of the tree raises before any leaf is walked" begin

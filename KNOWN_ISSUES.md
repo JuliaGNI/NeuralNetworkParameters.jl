@@ -98,17 +98,6 @@ fixed; the fix goes in `CHANGELOG.md`.
 - kind: defect
 - found: #43
 
-### K12 · `mapstorage` in the function of another `mapstorage` does not infer its result type
-
-- location: `src/walk.jl`, the methods of `mapstorage`
-- evidence: `julia --startup-file=no --project=. scripts/nested_walk_cost.jl nestedmap`, Julia
-  1.13.2, prints `concrete = false` for `mapstorage in mapstorage, two leaves` in `Float32` and in
-  `Float64`, where the three rows of `mapparameters` in `mapparameters` print `concrete = true`.
-  `mapstorage` recurses through its own methods and `_map_zip` at run time, as `mapparameters` did on
-  0.5.2. GeometricOptimizers calls no `mapstorage` in its `src/`.
-- kind: defect
-- found: 2026-10-23
-
 ## Tests
 
 ### K5 · Test comments carry history and measurements

@@ -16,14 +16,14 @@ MNIST transformer in GMLDatasets.jl.
 
 ## The walk across the children of a branch
 
-`mapstorage`, the layout and the flattening walk down the tree by dispatch on `NetworkParameters`,
+The layout and the flattening walk down the tree by dispatch on `NetworkParameters`,
 `NamedTuple`, `Tuple` or a leaf. They walk *across* the children of one branch with one call of a
 primitive of `src/unrolled.jl`: a map, a left fold, and a map that carries a state from child to
 child. Each primitive is a generated body that reads child `i` with `getfield` at the literal index
 `i`. A foreach is the map, called for its effect. Such a walk binds its own function with the
 internal `_FixFirst` and not with `Base.Fix1`, because a primitive passes one child of each set, and
-`Base.Fix1` takes only one further argument on Julia 1.11. `mapparameters`, the in-place walks and
-the folds take another form, described in the next section.
+`Base.Fix1` takes only one further argument on Julia 1.11. The maps, the in-place walks and the
+folds take another form, described in the next section.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`
 children costs `k` specialisations whose argument types are each `O(k)` long. The 0.2.2 entry of
@@ -50,14 +50,14 @@ sides. The walks of this package do not annotate `op`, because the boxing is the
 369 children a chain takes 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3, where the
 written-out fold takes 2.11, 0.80 and 0.47 s.
 
-## `mapparameters`, the in-place walks and the folds are one body per tree
+## The maps, the in-place walks and the folds are one body per tree
 
-`mapparameters`, `foreachparameters`, `mapparameters!`, `mapstorage!`, `foldparameters` and
-`foldstorage` read the whole tree off the types of their arguments when they are generated, and each
-is one body with one call per leaf. The key and arity checks are the generator's, as in the
-primitives. `mapparameters` checks the keys of a branch before the number of its children, so two
-keyed branches of different widths are reported by their keys; the other walks and the primitives
-check the number first.
+`mapparameters`, `mapstorage`, `foreachparameters`, `mapparameters!`, `mapstorage!`,
+`foldparameters` and `foldstorage` read the whole tree off the types of their arguments when they are
+generated, and each is one body with one call per leaf. The key and arity checks are the
+generator's, as in the primitives. The maps check the keys of a branch before the number of its
+children, so two keyed branches of different widths are reported by their keys; the other walks and
+the primitives check the number first.
 
 **Why not a walk that recurses through its own methods.** An optimizer that steps each leaf with its
 own method runs a walk in the function of another one. A walk that recurses through its own methods
@@ -74,10 +74,11 @@ An optimizer that builds its cache and its state per leaf runs a map in the func
 and a map that recurses through its own methods returns a type that inference widens the same way.
 On NNP 0.5.2, `mapparameters` whose function runs `mapparameters` on a set of one leaf, of two leaves,
 or of one leaf at arity two, does not infer a concrete result type in any of the three cases, in
-`Float32` or `Float64`; the generated `mapparameters` infers all six. Julia 1.13.2,
-`scripts/nested_walk_cost.jl nestedmap`. The `TrainingOptimizer` of a `CompositeMethod` in
-GeometricOptimizers is such a caller: on NNP 0.5.2 its type is not inferred, and a caller that builds
-it and steps in one function allocates 64 B per step.
+`Float32` or `Float64`; the generated `mapparameters` infers all six. `mapstorage` in `mapstorage`
+on a set of two leaves does not infer on NNP 0.5.2 either, and infers in both element types as a
+generated body. Julia 1.13.2, `scripts/nested_walk_cost.jl nestedmap`. The `TrainingOptimizer` of a
+`CompositeMethod` in GeometricOptimizers is such a caller: on NNP 0.5.2 its type is not inferred, and
+a caller that builds it and steps in one function allocates 64 B per step.
 
 **Why `f` at a leaf and not the leaf method.** A generated body that calls the leaf method of
 `foreachparameters` or of `foldparameters` at each leaf puts that method on the inference stack
