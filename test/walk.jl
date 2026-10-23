@@ -360,6 +360,76 @@ end
           sum(X.L2.W .* Y.L2.W .^ 3)
 end
 
+# A map inside the function of another map, as an optimizer builds its cache and state per leaf: the
+# outer map runs an inner map on a set made of each leaf, of one leaf and of two leaves at two depths,
+# and at arity two. The inner function nests one level deeper than the outer one. The result type is
+# inferred, so a caller that builds and uses the result in one function dispatches statically.
+_double(x) = 2x
+_two_leaves(x) = NetworkParameters((a = x, b = (c = x,)))
+function _mapped_one_leaf(X)
+    mapparameters(x -> mapparameters(_InnerStep(_double), _one_leaf(x)), X)
+end
+function _mapped_two_leaves(X)
+    mapparameters(x -> mapparameters(_InnerStep(_double), _two_leaves(x)), X)
+end
+function _mapped_zipped(X, Y)
+    mapparameters((x, y) -> mapparameters(_InnerStep(+), _one_leaf(x), _one_leaf(y)), X, Y)
+end
+
+@testset "a map in the function of another map infers its result ($T)" for T in (Float32, Float64)
+    X = NetworkParameters((
+        L1 = (W = _entries(T, 3, 2), b = _entries(T, 3)), L2 = (W = _entries(T, 1, 3),)))
+    @test @inferred(_mapped_one_leaf(X)) isa NetworkParameters{T}
+    @test @inferred(_mapped_two_leaves(X)) isa NetworkParameters{T}
+    @test @inferred(_mapped_zipped(X, X)) isa NetworkParameters{T}
+
+    # and the maps still do the work
+    one_leaf = _mapped_one_leaf(X)
+    @test one_leaf.L1.W.leaf == 2 * X.L1.W
+    @test one_leaf.L2.W.leaf == 2 * X.L2.W
+    @test one_leaf.L1.b.leaf isa Vector{T}
+    two_leaves = _mapped_two_leaves(X)
+    @test two_leaves.L1.b.a == 2 * X.L1.b
+    @test two_leaves.L1.b.b.c == 2 * X.L1.b
+    zipped = _mapped_zipped(X, X)
+    @test zipped.L1.W.leaf == 2 * X.L1.W
+    @test zipped.L2.W.leaf == 2 * X.L2.W
+end
+
+# `mapparameters` is one generated body per tree, as the in-place walks are: a mismatch below the top
+# raises before `f` runs, a field type that is not concrete is walked into at run time, a set of
+# `nothing` beside a branch raises, and a branch of more than 32 children below the top is mapped
+# across at run time, inside a set that is rebuilt in the shape of the first.
+@testset "the generated map keeps the contract of the map" begin
+    calls = Ref(0)
+    counted = (x, y) -> (calls[] += 1; x)
+    a = (L1 = (W = [1.0],), L2 = (a = [1.0], b = [2.0]))
+    @test_throws "different keys" mapparameters(counted, a,
+        (L1 = (W = [1.0],), L2 = (b = [1.0], a = [2.0])))
+    @test_throws "different keys" mapparameters(counted, a, (
+        L1 = (W = [1.0],), L2 = (a = [1.0],)))
+    @test_throws "same number of children" mapparameters(
+        counted, (L1 = [1.0], L2 = ([1.0], [2.0])),
+        (L1 = [1.0], L2 = ([1.0],)))
+    @test_throws "nothing to put" mapparameters(counted, a, (
+        L1 = (W = [1.0],), L2 = nothing))
+    @test calls[] == 0
+
+    loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((
+        (W = [1.0, 2.0], b = [3.0]), [4.0]))
+    @test mapparameters(x -> 2x, loose) == (L1 = (W = [2.0, 4.0], b = [6.0]), L2 = [8.0])
+    @test mapparameters(+, params(mapparameters(zero, NetworkParameters(loose))), loose) ==
+          loose
+
+    wide = NamedTuple{ntuple(i -> Symbol(:p, i), 33)}(ntuple(i -> [Float64(i)], 33))
+    mapped = mapparameters(+, NetworkParameters((L = NetworkParameters(wide), M = [1.0])),
+        (L = wide, M = [1.0]))
+    @test mapped isa NetworkParameters
+    @test mapped.L isa NetworkParameters
+    @test mapped.L.p33 == [66.0]
+    @test mapped.M == [2.0]
+end
+
 # The keys and widths of the whole tree are checked when the walk is generated, so a mismatch below
 # the top raises before `f` runs on any leaf, and a walk that raises has changed nothing.
 @testset "a mismatch below the top of the tree raises before any leaf is walked" begin

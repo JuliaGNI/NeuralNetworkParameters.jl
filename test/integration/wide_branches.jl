@@ -325,7 +325,7 @@ end
 end
 
 # Two checks, and a pair of wide `NamedTuple`s only ever reaches the first of them: branches of
-# different widths are keyed differently, so `_check_keys` rejects them before any walk starts. The
+# different widths are keyed differently, and `mapparameters` checks the keys first. The
 # arity check the `Base.tail` chains used to get by running out of `Tuple{}` methods, and which the
 # written-out bodies raise for themselves, is reachable only through a *positional* branch — a
 # multi-block leaf whose blocks do not line up.

@@ -5,14 +5,18 @@
 #
 #     julia --project=. scripts/nested_walk_cost.jl nested
 #     julia --project=. scripts/nested_walk_cost.jl wide
+#     julia --project=. scripts/nested_walk_cost.jl nestedmap
 #     julia --project=. scripts/nested_walk_cost.jl <walk> <shape>
 #
 # `nested` prints the allocations of each in-place walk and fold when its function runs a second
 # walk of the same kind on a one-leaf set, the way an optimizer that steps each leaf with its own
 # method does. `wide` does the same with an inner walk of four sets inside an outer walk of two, as
-# `KNOWN_ISSUES.md` K11 cites.
+# `KNOWN_ISSUES.md` K11 cites. `nestedmap` prints whether the result type of `mapparameters` is
+# inferred concretely when its function runs a second `mapparameters` on a set of one leaf or of two
+# leaves, or of one leaf at arity two, the way an optimizer builds its cache per leaf, and the same
+# for `mapstorage` in `mapstorage`, as `KNOWN_ISSUES.md` K12 cites.
 #
-# `<walk>` is one of `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
+# `<walk>` is one of `map`, `foreach`, `mapstorage!`, `fold` and `foldstorage`, and `<shape>` one of
 # `small` (3 leaves, depth 2), `deep` (64 leaves, depth 4) and `flat` (369 leaves, depth 1). That mode
 # prints the first-call time of a cold process, which is compilation and a negligible run, the
 # allocations of the second call, and the fastest of 1000 calls.
@@ -128,6 +132,29 @@ function wide()
     end
 end
 
+double(x) = 2x
+two_leaves(x) = NetworkParameters((a = x, b = (c = x,)))
+mapped_one_leaf(X) = mapparameters(x -> mapparameters(Step(double), one_leaf(x)), X)
+mapped_two_leaves(X) = mapparameters(x -> mapparameters(Step(double), two_leaves(x)), X)
+function mapped_zipped(X)
+    mapparameters((x, y) -> mapparameters(Step(+), one_leaf(x), one_leaf(y)), X, X)
+end
+stored_two_leaves(X) = mapstorage(x -> mapstorage(Step(double), two_leaves(x)), X)
+
+function nestedmap()
+    for T in (Float32, Float64)
+        X = NetworkParameters((
+            L1 = (W = rand(T, 3, 2), b = rand(T, 3)), L2 = (W = rand(T, 1, 3),)))
+        for (name, walk) in (("mapparameters in mapparameters, one leaf", mapped_one_leaf),
+            ("mapparameters in mapparameters, two leaves", mapped_two_leaves),
+            ("mapparameters in mapparameters, one leaf, arity two", mapped_zipped),
+            ("mapstorage in mapstorage, two leaves", stored_two_leaves))
+            inferred = only(Base.return_types(walk, Tuple{typeof(X)}))
+            println(rpad("$T $name:", 64), "concrete = ", isconcretetype(inferred))
+        end
+    end
+end
+
 # The sets of the cost mode: leaves of 2 × 2
 function shape(name)
     leaf() = rand(2, 2)
@@ -141,7 +168,10 @@ function shape(name)
 end
 
 sum_product(a, x, y) = a + sum(x) * sum(y)
+# a map whose function costs nothing to compile, so that the first call is the walk's
+left(x, y) = x
 const WALKS = Dict(
+    "map" => (X, Y) -> mapparameters(left, X, Y),
     "foreach" => (X, Y) -> mapparameters!(copyto!, X, Y),
     "mapstorage!" => (X, Y) -> mapstorage!(copyto!, X, Y),
     "fold" => (X, Y) -> foldparameters(sum_product, 0.0, X, Y),
@@ -163,4 +193,6 @@ function cost(walk, name)
         bytes, " B, fastest ", round(Int, fastest * 1e9), " ns")
 end
 
-ARGS == ["nested"] ? nested() : ARGS == ["wide"] ? wide() : cost(ARGS...)
+ARGS == ["nested"] ? nested() :
+ARGS == ["wide"] ? wide() :
+ARGS == ["nestedmap"] ? nestedmap() : cost(ARGS...)
