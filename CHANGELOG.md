@@ -4,6 +4,41 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`mapparameters` and `mapstorage` infer their result type when their function runs the same map.**
+  On 0.5.2, both recursed through their own methods at run time. A map in its function put those
+  methods on the inference stack a second time, with a function argument nested one level deeper,
+  and inference widened the call: the result type was not concrete. With an inner `mapparameters`
+  on a set of one leaf, of two leaves, or of one leaf at arity two, in `Float32` and `Float64`,
+  `scripts/nested_walk_cost.jl nestedmap` prints `concrete = false` in all six cases on 0.5.2 and
+  `concrete = true` in all six now (Julia 1.13.2). An inner `mapstorage` on a set of two leaves
+  prints `concrete = true` in both element types now; the `mapstorage` methods of 0.5.2 are the ones
+  this change replaces, and that case is not inferred there. An optimizer that builds its cache and its
+  state per leaf runs such a map: the `TrainingOptimizer` of a `CompositeMethod` in GeometricOptimizers, on
+  a set with a Stiefel leaf and with an explicit step size, was not inferred for any of three method
+  pairs in either element type, and a caller that builds it and steps in one function allocated 64 B
+  per step where `Adam` on the whole set allocates nothing; it is now inferred in all six cases, and
+  allocates nothing.
+  `mapparameters` and `mapstorage` are each one generated body per tree type, as the in-place walks
+  and the folds are, and map across a branch of more than 32 children with `Base.map`, as before.
+  Their values, result shapes, the rewrap of each `NetworkParameters`, a `nothing` at a leaf reaching
+  `f`, and the error at a set of `nothing` beside a branch are as before, and so is the order in which
+  `mapparameters` calls `f`. A key or arity error below the top of the tree is raised before `f` runs
+  on any leaf, where 0.5.2 ran `f` on the leaves before the branch at fault; below a branch of more
+  than 32 children or a field whose type is not concrete, `f` can still run first. For `mapstorage`
+  there is one more exception: inside a leaf whose storage has several blocks, which the walk enters
+  at run time, `f` can run first. The key error names the argument whose keys differ, as every walk's
+  does. `mapstorage`'s did not name it on 0.5.2, which gave only the two key tuples.
+  The first call compiles in 0.04 s against 0.08 s on 0.5.2 on 3 leaves, 0.06 s
+  against 0.11 s on 64 leaves of depth 4, and 0.24 s against 0.21 s on 369 leaves of depth 1: the
+  median of three cold processes, Julia 1.13.2, load average about 15,
+  `scripts/nested_walk_cost.jl map <shape>`. `test/walk.jl` tests the nested `mapparameters` and
+  `mapstorage` with `@inferred`, in `Float32` and `Float64`. The first-call compile times above are for
+  `mapparameters`; `mapstorage`'s are not measured.
+
 ## [0.5.2] — 2026-10-13
 
 ### Fixed

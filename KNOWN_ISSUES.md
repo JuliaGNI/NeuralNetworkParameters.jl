@@ -133,3 +133,14 @@ fixed; the fix goes in `CHANGELOG.md`.
   each. The cause is not known.
 - kind: defect
 - found: #42
+
+### K13 · The wide-branch test file runs longer than 60 s cold on Julia 1.11
+
+- location: `test/integration/wide_branches.jl`
+- evidence: `julia +1.11 --startup-file=no run-tests.jl <repository> core` on Julia 1.11.9 reports
+  `D6: test/integration/wide_branches.jl runs 68.7 s cold, above the 60 s of a core file` on 0.5.2
+  (`f35e7f1`), under a load average of about 22. On Julia 1.13.2 the same file runs 36.7 s. The
+  limit is the test convention's for a file of the `core` group; a slower file goes to `slow`. The
+  time under a lower load is not measured.
+- kind: defect
+- found: 2026-10-23

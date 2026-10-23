@@ -1,11 +1,12 @@
 # The generated walks still work when the sources are evaluated rather than loaded from a cache.
 #
-# The maps, the layout and the flattening walk across children with the three generated primitives of
-# `src/unrolled.jl`, whose generators call `_children_arity`, `_child_args`, `_branch_keys`,
-# `_child_expr`, `_check_child_keys` and their two error helpers. The in-place walks and the folds are
-# generated bodies of `src/walk.jl`, whose generators call `_foreach_body`, `_fold_body`,
-# `_tree_nodes`, `_tree_nodes!` and `_like_type` as well. A generator runs in the world age of its own
-# method definition, so a helper defined further down is invisible to it and the generator raises
+# `mapstorage`, the layout and the flattening walk across children with the three generated primitives
+# of `src/unrolled.jl`, whose generators call `_children_arity`, `_child_args`, `_branch_keys`,
+# `_child_expr`, `_check_child_keys` and their two error helpers. `mapparameters`, the in-place walks
+# and the folds are generated bodies of `src/walk.jl`, whose generators call `_map_body`,
+# `_foreach_body`, `_fold_body`, `_tree_nodes`, `_tree_nodes!`, `_node_name` and `_like_type` as
+# well. A generator runs in the world age of its own method definition, so a helper defined further
+# down is invisible to it and the generator raises
 # `MethodError: no method matching _children_arity(…)  The applicable method may be too new`.
 #
 # It cannot be caught in-process. Loading a precompiled package deserialises every method in the
@@ -14,9 +15,9 @@
 # and a subprocess is the only way to ask for it.
 #
 # Cheap enough to keep: the package's dependency is `ChainRulesCore`, so a from-source load is about a
-# second. The walks below reach every generator: `_unrolled_map` through `mapparameters` and
-# `unflatten`, `_unrolled_foldl` through `parameter_eltype`, `_unrolled_mapaccum` through
-# `parameterlayout`, and the generated bodies of the `foreach` walks and of the folds. The walks run
+# second. The walks below reach every generator: `_unrolled_map` through `unflatten`,
+# `_unrolled_foldl` through `parameter_eltype`, `_unrolled_mapaccum` through `parameterlayout`, and the
+# generated bodies of `mapparameters`, of the `foreach` walks and of the folds. The walks run
 # at **two** arities, because the key
 # and index helpers a further set needs are only reached at the second — one set has no second set to
 # pair against, so an arity-one walk would leave exactly that chain of helpers untried.
@@ -35,7 +36,7 @@ using NeuralNetworkParameters
 
 ps = (L1 = (W = [1.0 2.0], b = [3.0]), L2 = (W = [4.0;;],))
 
-# `_unrolled_map`
+# the generated `mapparameters`, at arity one and two
 mapparameters(zero, ps) == (L1 = (W = [0.0 0.0], b = [0.0]), L2 = (W = [0.0;;],)) || exit(1)
 mapparameters(+, ps, ps).L1.b == [6.0] || exit(2)
 

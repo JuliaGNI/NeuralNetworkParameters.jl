@@ -16,14 +16,14 @@ MNIST transformer in GMLDatasets.jl.
 
 ## The walk across the children of a branch
 
-The maps, the layout and the flattening walk down the tree by dispatch on `NetworkParameters`,
+The layout and the flattening walk down the tree by dispatch on `NetworkParameters`,
 `NamedTuple`, `Tuple` or a leaf. They walk *across* the children of one branch with one call of a
 primitive of `src/unrolled.jl`: a map, a left fold, and a map that carries a state from child to
 child. Each primitive is a generated body that reads child `i` with `getfield` at the literal index
 `i`. A foreach is the map, called for its effect. Such a walk binds its own function with the
 internal `_FixFirst` and not with `Base.Fix1`, because a primitive passes one child of each set, and
-`Base.Fix1` takes only one further argument on Julia 1.11. The in-place walks and the folds take
-another form, described in the next section.
+`Base.Fix1` takes only one further argument on Julia 1.11. The maps, the in-place walks and the
+folds take another form, described in the next section.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`
 children costs `k` specialisations whose argument types are each `O(k)` long. The 0.2.2 entry of
@@ -50,11 +50,14 @@ sides. The walks of this package do not annotate `op`, because the boxing is the
 369 children a chain takes 1.94 s on 1.11.9, 28.55 s on 1.12.7 and 37.86 s on 1.13.0-rc3, where the
 written-out fold takes 2.11, 0.80 and 0.47 s.
 
-## The in-place walks and the folds are one body per tree
+## The maps, the in-place walks and the folds are one body per tree
 
-`foreachparameters`, `mapparameters!`, `mapstorage!`, `foldparameters` and `foldstorage` read the
-whole tree off the types of their arguments when they are generated, and each is one body with one
-call per leaf. The key and arity checks are the generator's, as in the primitives.
+`mapparameters`, `mapstorage`, `foreachparameters`, `mapparameters!`, `mapstorage!`,
+`foldparameters` and `foldstorage` read the whole tree off the types of their arguments when they are
+generated, and each is one body with one call per leaf. The key and arity checks are the
+generator's, as in the primitives. The maps check the keys of a branch before the number of its
+children, so two keyed branches of different widths are reported by their keys; the other walks and
+the primitives check the number first.
 
 **Why not a walk that recurses through its own methods.** An optimizer that steps each leaf with its
 own method runs a walk in the function of another one. A walk that recurses through its own methods
@@ -66,6 +69,16 @@ one-leaf set of each of the 3 leaves of a set, its `foreachparameters` in `forea
 `mapstorage!` in `mapstorage!` allocate 96 B per step, or 192 and 240 B with five captured `Float32`
 and `Float64` coefficients, and each of its folds in itself 144 B. The generated walks allocate
 nothing in all these cases. Julia 1.13.1, `julia --project=. scripts/nested_walk_cost.jl nested`.
+
+An optimizer that builds its cache and its state per leaf runs a map in the function of another map,
+and a map that recurses through its own methods returns a type that inference widens the same way.
+On NNP 0.5.2, `mapparameters` whose function runs `mapparameters` on a set of one leaf, of two leaves,
+or of one leaf at arity two, does not infer a concrete result type in any of the three cases, in
+`Float32` or `Float64`; the generated `mapparameters` infers all six. `mapstorage` in `mapstorage`
+on a set of two leaves does not infer on NNP 0.5.2 either, and infers in both element types as a
+generated body. Julia 1.13.2, `scripts/nested_walk_cost.jl nestedmap`. The `TrainingOptimizer` of a
+`CompositeMethod` in GeometricOptimizers is such a caller: on NNP 0.5.2 its type is not inferred, and
+a caller that builds it and steps in one function allocates 64 B per step.
 
 **Why `f` at a leaf and not the leaf method.** A generated body that calls the leaf method of
 `foreachparameters` or of `foldparameters` at each leaf puts that method on the inference stack
@@ -101,12 +114,27 @@ The folds compile as fast or faster. One call takes the same time within the res
 the clock, and allocates nothing on either side. The generators' helpers are precompiled, since a
 generator runs at the first call of a walk on a tree type.
 
+The first call of `mapparameters` at arity two, with a function that costs nothing to compile, on
+the same three sets: the median of three cold processes per cell, NNP 0.5.2 and the generated map
+alternating. Julia 1.13.2, `scripts/nested_walk_cost.jl map <shape>`, load average about 15.
+
+| | 3 leaves | 64 leaves | 369 leaves |
+|:--|--:|--:|--:|
+| `mapparameters`, NNP 0.5.2 | 0.08 s | 0.11 s | 0.21 s |
+| `mapparameters`, generated | 0.04 s | 0.06 s | 0.24 s |
+
+The generated map compiles faster on the two smaller sets and about as fast on the flat set, whose
+branch of 369 children both map across with `Base.map`. A later call allocates the same on both.
+
 ## Two walks that take another form
 
 **`mapparameters` and `mapstorage` hand a branch wider than 32 children to `Base.map`.** They run once
 per cache or per device move, not per iteration, and their compile time is paid per pair of function
 and branch shape. On a flat set of 369, `map(zero, ps)` compiled in 0.01 s and a written-out
-`mapparameters(zero, ps)` in 1.51 s. Julia 1.11.9, `scripts/wide_branch_cost.jl`. GeometricOptimizers
+`mapparameters(zero, ps)` in 1.51 s. Julia 1.11.9, `scripts/wide_branch_cost.jl`. The generated
+`mapparameters` maps across such a branch with `Base.map` too: written out in its body, with
+`_WRITE_OUT_MAX_CHILDREN` raised above 369, its first call of `zero` on that set takes 10.4 s, against
+0.03 s with `Base.map`. Julia 1.13.2, two cold processes each. GeometricOptimizers
 reaches six such walks while it builds one `OptimizerCache`, so a written-out walk raises the compile
 time of that cache. `Base.map` past 32 fields drops to its `Any32` loop: its result type is
 not inferred, and it allocates. A closure passed to it costs about as

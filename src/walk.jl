@@ -4,13 +4,12 @@
 # puts the result back in the same shape. The walk is written once, over the
 # `freeparameters`/`rebuild` protocol, so it never needs to know which structured types exist.
 #
-# The in-place walks and the folds read the whole tree off the types of their arguments and are one
-# generated body each, with one call per leaf and no recursion at run time. A walk often runs inside
-# the function of another walk, such as an optimizer step per leaf, and inference widens the types
-# of a method that it finds twice on its stack with more deeply nested arguments; a walk that recurses
-# through its own methods there dispatches dynamically and allocates at every leaf. The maps build a
-# new tree: their walk down the tree is dispatch on `NetworkParameters`, `NamedTuple`, `Tuple` or a
-# leaf, and their walk across the children of one branch is one call of a primitive of `unrolled.jl`.
+# Every walk reads the whole tree off the types of its arguments and is one generated body, with one
+# call per leaf and no recursion at run time. A walk often runs inside the function of another walk,
+# such as an optimizer step or the building of a cache per leaf, and inference widens the types of a
+# method that it finds twice on its stack with more deeply nested arguments; a walk that recurses
+# through its own methods there dispatches dynamically, allocates at every leaf, and a map returns a
+# type that is not concrete.
 
 const _Branch = Union{NetworkParameters, NamedTuple, Tuple}
 
@@ -26,62 +25,92 @@ function _like_type(@nospecialize(B::Type), @nospecialize(R::Type))
     nothing
 end
 
+# `mapparameters` and `mapstorage` map across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children
+# with `Base.map`, which compiles faster than a body written out per child and returns a container
+# whose type is not inferred. The out-of-place walks run once per cache or per device move, not per
+# iteration, so for them the compile time matters more. 32 is the width to which `Base` unrolls a tuple
+# itself.
+const _WRITE_OUT_MAX_CHILDREN = 32
+
 # The nodes of a whole-tree walk, in the order `flatten` writes the leaves, pushed to `nodes`. A node
-# is `(x, rs, leaf, skip)`: the expression that reads a leaf of the first set, those that read the
-# node beside it in each further set, whether its type is known to be a leaf's and the type of each
-# node beside it is concrete, so that none can be a `nothing` the type does not show, and whether a
-# further set is `nothing` there. A node whose children only the run time knows, because a type is not
-# concrete, is pushed as a leaf of a type that is not known, and the walk dispatches on it. An `Expr`
-# pushed instead ends the walk: `_like` where it raises, or `stop` at a branch beside a further set of
-# `nothing`, where `stop` is not `nothing`. Returns whether the walk ended. The types are held in
-# `Vector{Any}`s and not specialised on, since this runs once per generated body.
+# is `(x, rs, leaf, skip, wide)`: the expression that reads a leaf of the first set, those that read
+# the node beside it in each further set, whether its type is known to be a leaf's and the type of
+# each node beside it is concrete, so that none can be a `nothing` the type does not show, whether a
+# further set is `nothing` there, and whether it is a branch that the walk maps across at run time. A
+# node whose children only the run time knows, because a type is not concrete, is pushed as a leaf of
+# a type that is not known, and the walk dispatches on it. An `Expr` pushed instead ends the walk:
+# `_like` where it raises, or `stop` at a branch beside a further set of `nothing`, where `stop` is not
+# `nothing`.
+#
+# An `out_of_place` walk checks the keys of a branch before `stop` and its number of children, as
+# the maps report two keyed branches of different widths by their keys, and pushes a branch of
+# more than `_WRITE_OUT_MAX_CHILDREN` children whole, after these checks. The in-place walks and the
+# folds report the number of children first, as the primitives do.
+#
+# Returns the shape of the node, or `nothing` where the walk ended: an expression that builds the node
+# again from the value of each node it holds, which is named by `_node_name` of the node's index, so
+# that a map returns a tree of the shape of its first set. The types are held in `Vector{Any}`s and
+# not specialised on, since this runs once per generated body.
 function _tree_nodes!(nodes::Vector{Any}, @nospecialize(X::Type), Rs::Vector{Any}, x,
-        rs::Vector{Any}, stop)
+        rs::Vector{Any}, stop, out_of_place::Bool)
     if !(isconcretetype(X) && X <: _Branch)
         push!(nodes,
             (x, rs, isconcretetype(X) && all(isconcretetype, Rs),
-                any(R -> R === Nothing, Rs)))
-        return false
+                any(R -> R === Nothing, Rs), false))
+        return _node_name(length(nodes))
     end
-    if X <: NetworkParameters
+    wrapped = X <: NetworkParameters
+    if wrapped
         X, x = fieldtype(X, 1), :(getfield($x, 1))
     end
+    rewrap(shape) = wrapped ? :(NetworkParameters($shape)) : shape
     Ls = Any[_like_type(X, R) for R in Rs]
     if any(ismissing, Ls)
-        push!(nodes, (x, rs, false, false))
-        return false
+        push!(nodes, (x, rs, false, false, false))
+        return rewrap(_node_name(length(nodes)))
     end
     j = findfirst(isnothing, Ls)
     if j !== nothing
         push!(nodes, :(_like($x, $(rs[j]))))
-        return true
+        return nothing
     end
+    ks = _branch_keys(X)
+    out_of_place && foreach(j -> _check_child_keys(ks, Ls[j], j), eachindex(Ls))
     if stop !== nothing && any(L -> L === Nothing, Ls)
         push!(nodes, stop)
-        return true
+        return nothing
     end
     n = _children_arity(X, Tuple(Ls))
-    ks = _branch_keys(X)
-    for j in eachindex(Ls)
-        _check_child_keys(ks, Ls[j], j)
-    end
+    out_of_place || foreach(j -> _check_child_keys(ks, Ls[j], j), eachindex(Ls))
     ls = Any[R <: NetworkParameters ? :(getfield($r, 1)) : r for (R, r) in zip(Rs, rs)]
+    if out_of_place && n > _WRITE_OUT_MAX_CHILDREN
+        push!(nodes, (x, ls, false, false, true))
+        return rewrap(_node_name(length(nodes)))
+    end
+    children = Any[]
     for i in 1:n
         Cs = Any[L === Nothing ? Nothing : fieldtype(L, i) for L in Ls]
         cs = Any[L === Nothing ? :nothing : :(getfield($l, $i)) for (L, l) in zip(Ls, ls)]
-        _tree_nodes!(nodes, fieldtype(X, i), Cs, :(getfield($x, $i)), cs, stop) &&
-            return true
+        child = _tree_nodes!(
+            nodes, fieldtype(X, i), Cs, :(getfield($x, $i)), cs, stop, out_of_place)
+        child === nothing && return nothing
+        push!(children, child)
     end
-    false
+    rewrap(ks === nothing ? :(($(children...),)) : :(NamedTuple{$ks}(($(children...),))))
 end
 
-# The nodes of a generated walk of `ps` and the further sets `rest`, read from its arguments
-function _tree_nodes(@nospecialize(ps::Type), @nospecialize(rest::Tuple), stop)
+# The name of the value of node `k` in the body of a map
+_node_name(k::Int) = Symbol(:node, k)
+
+# The nodes of a generated walk of `ps` and the further sets `rest`, read from its arguments, and the
+# shape of `ps`
+function _tree_nodes(@nospecialize(ps::Type), @nospecialize(rest::Tuple), stop,
+        out_of_place::Bool = false)
     nodes = Any[]
-    _tree_nodes!(
+    shape = _tree_nodes!(
         nodes, ps, Any[rest...], :ps, Any[:(getfield(rest, $j)) for j in eachindex(rest)],
-        stop)
-    nodes
+        stop, out_of_place)
+    nodes, shape
 end
 
 # The body of an in-place walk. Nothing where a further set is `nothing`; `f(x, rs...)` at a leaf of a
@@ -93,11 +122,11 @@ end
 function _foreach_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
         @nospecialize(rest::Tuple))
     body = Any[Expr(:meta, :inline)]
-    for n in _tree_nodes(ps, rest, nothing)
+    for n in first(_tree_nodes(ps, rest, nothing))
         if n isa Expr
             push!(body, n)
         else
-            x, rs, leaf, skip = n
+            x, rs, leaf, skip, _ = n
             skip ||
                 push!(body, direct && leaf ? :(f($x, $(rs...))) : :($walk(f, $x, $(rs...))))
         end
@@ -111,11 +140,11 @@ function _fold_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
         @nospecialize(rest::Tuple))
     body = Any[Expr(:meta, :inline)]
     acc = :init
-    for n in _tree_nodes(ps, rest, :(_no_folded_skip_error()))
+    for n in first(_tree_nodes(ps, rest, :(_no_folded_skip_error())))
         if n isa Expr
             push!(body, n)
         else
-            x, rs, leaf, _ = n
+            x, rs, leaf, _, _ = n
             next = gensym(:acc)
             call = direct && leaf ? :(op($acc, $x, $(rs...))) :
                    :($walk(op, $acc, $x, $(rs...)))
@@ -126,10 +155,29 @@ function _fold_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
     Expr(:block, body..., :(return $acc))
 end
 
+# The body of a map: the value of each node, then the tree of these values in the shape of `ps`. The
+# value is `f(x, rs...)` at a leaf of a known type where `direct`, for the reason of `_foreach_body`,
+# `Base.map` of `walk` across a branch of more than `_WRITE_OUT_MAX_CHILDREN` children, and
+# `walk(f, x, rs...)` at every other node. A further set that is `nothing` beside a branch raises,
+# since a new tree has nothing to put there; where the walk raises, it calls `f` on no leaf.
+function _map_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
+        @nospecialize(rest::Tuple))
+    nodes, shape = _tree_nodes(ps, rest, :(_no_skipped_set_error()), true)
+    shape === nothing && return Expr(:block, Expr(:meta, :inline), last(nodes))
+    body = Any[Expr(:meta, :inline)]
+    for (k, (x, rs, leaf, _, wide)) in enumerate(nodes)
+        value = wide ? :(map(_FixFirst($walk, f), $x, $(rs...))) :
+                direct && leaf ? :(f($x, $(rs...))) : :($walk(f, $x, $(rs...)))
+        push!(body, :($(_node_name(k)) = $value))
+    end
+    Expr(:block, body..., :(return $shape))
+end
+
 # A generator runs when a walk first meets a tree type, so its helpers are compiled into the package
 # image rather than at that first call.
 precompile(_foreach_body, (Symbol, Bool, Type, Tuple))
 precompile(_fold_body, (Symbol, Bool, Type, Tuple))
+precompile(_map_body, (Symbol, Bool, Type, Tuple))
 
 """
     mapparameters(f, ps)
@@ -142,6 +190,13 @@ how two parameter sets are combined entrywise. Their keys have to agree.
 
 `f` sees *whole* leaves — a `SymmetricMatrix` arrives as a `SymmetricMatrix`. Use [`mapstorage`](@ref)
 to see only the differentiable storage instead.
+
+The result type is inferred, also where `f` runs another `mapparameters`, as an optimizer does that
+builds its cache per leaf: the whole tree is one generated body, with one call of `f` per leaf. A
+branch of more than 32 children is the exception: it is mapped with `Base.map`, which compiles faster
+and whose result type is not inferred. A key or arity mismatch raises before `f` runs on any leaf,
+except below such a branch or below a field whose type is not concrete, which the walk enters at run
+time.
 
 # Examples
 
@@ -173,18 +228,9 @@ mapparameters(+, a, c).L1.b
  22.0
 ```
 """
-@inline mapparameters(f, ps::NetworkParameters,
-    rest::Vararg{Any, N}) where {N} = NetworkParameters(mapparameters(
-    f, params(ps), map(_as_namedtuple, rest)...))
-
-@inline function mapparameters(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
-    nts = map(_as_namedtuple, rest)
-    _check_keys(keys(ps), nts)
-    _rewrap_children(ps, _map_zip(mapparameters, f, ps, nts...))
+@generated function mapparameters(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _map_body(:mapparameters, true, ps, rest)
 end
-
-@inline mapparameters(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
-    mapparameters, f, ps, map(_as_tuple, rest)...)
 
 @inline mapparameters(f, x, rest::Vararg{Any, N}) where {N} = f(x, rest...)
 
@@ -219,17 +265,9 @@ mapstorage(x -> x ./ 2, ps).L1.W
  1.5  2.0
 ```
 """
-@inline mapstorage(f, ps::NetworkParameters, rest::Vararg{
-    Any, N}) where {N} = NetworkParameters(mapstorage(f, params(ps), map(_as_namedtuple, rest)...))
-
-@inline function mapstorage(f, ps::NamedTuple, rest::Vararg{Any, N}) where {N}
-    nts = map(_as_namedtuple, rest)
-    _check_keys(keys(ps), nts)
-    _rewrap_children(ps, _map_zip(mapstorage, f, ps, nts...))
+@generated function mapstorage(f, ps::_Branch, rest::Vararg{Any, N}) where {N}
+    _map_body(:mapstorage, false, ps, rest)
 end
-
-@inline mapstorage(f, ps::Tuple, rest::Vararg{Any, N}) where {N} = _map_zip(
-    mapstorage, f, ps, map(_as_tuple, rest)...)
 
 @inline function mapstorage(f, x, rest::Vararg{Any, N}) where {N}
     s = freeparameters(x)
@@ -441,37 +479,10 @@ end
 @inline _leaf_storage(::Nothing) = nothing
 @inline _leaf_storage(x) = freeparameters(x)
 
-# The out-of-place walk across the children of a branch. A branch of at most
-# `_WRITE_OUT_MAX_CHILDREN` children takes the unrolled map; a wider one takes `Base.map`, which
-# compiles faster and returns a container whose type is not inferred. `mapparameters` and
-# `mapstorage` run once per cache or per device move, not per iteration, so for them the compile time
-# matters more. 32 is the width to which `Base` unrolls a tuple itself.
-const _WRITE_OUT_MAX_CHILDREN = 32
-
-@inline function _map_zip(recurse, f, xs, rest::Vararg{Any, N}) where {N}
-    # An out-of-place walk has nothing to put where a set is `nothing`.
-    any(isnothing, rest) && _no_skipped_set_error()
-    _children_arity(typeof(xs), map(typeof, rest))
-    g = _FixFirst(recurse, f)
-    fieldcount(typeof(xs)) > _WRITE_OUT_MAX_CHILDREN ? map(g, xs, rest...) :
-    _unrolled_map(g, xs, rest...)
-end
-
 @noinline _no_skipped_set_error() = throw(ArgumentError(string(
     "`mapparameters` and `mapstorage` build a new set and so have nothing to put where a `nothing` ",
     "stands; use `mapparameters!`, `mapstorage!` or `foreachparameters`, which skip that position.")))
 
-# The children of a branch in the branch's own shape. `Base.map` over a `NamedTuple` returns one keyed
-# already.
-@inline _rewrap_children(::NamedTuple{Keys}, children::NamedTuple{Keys}) where {Keys} = children
+# The `Tuple` of the children of a branch in the branch's own shape
 @inline _rewrap_children(::NamedTuple{Keys}, children) where {Keys} = NamedTuple{Keys}(children)
 @inline _rewrap_children(::Tuple, children) = children
-
-@inline _check_keys(::Tuple, ::Tuple{}) = nothing
-@inline function _check_keys(ks::Tuple, nts::Tuple)
-    other = first(nts)
-    if other !== nothing && keys(other) != ks
-        throw(ArgumentError(string("parameter sets have different keys: ", ks, " and ", keys(other))))
-    end
-    _check_keys(ks, Base.tail(nts))
-end
