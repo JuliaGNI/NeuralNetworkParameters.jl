@@ -413,6 +413,7 @@ end
         (L1 = [1.0], L2 = ([1.0],)))
     @test_throws "nothing to put" mapparameters(counted, a, (
         L1 = (W = [1.0],), L2 = nothing))
+    @test_throws "different keys" mapparameters(counted, a, (L1 = (W = [1.0],),), nothing)
     @test calls[] == 0
 
     loose = NamedTuple{(:L1, :L2), Tuple{Any, Vector{Float64}}}((

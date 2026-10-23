@@ -45,7 +45,7 @@ const _WRITE_OUT_MAX_CHILDREN = 32
 # `_like` where it raises, or `stop` at a branch beside a further set of `nothing`, where `stop` is not
 # `nothing`.
 #
-# An `out_of_place` walk checks the keys of a branch before its number of children, as
+# An `out_of_place` walk checks the keys of a branch before `stop` and its number of children, as
 # `mapparameters` reports two keyed branches of different widths by their keys, and pushes a branch of
 # more than `_WRITE_OUT_MAX_CHILDREN` children whole, after these checks. The in-place walks and the
 # folds report the number of children first, as the primitives do.
@@ -77,12 +77,12 @@ function _tree_nodes!(nodes::Vector{Any}, @nospecialize(X::Type), Rs::Vector{Any
         push!(nodes, :(_like($x, $(rs[j]))))
         return nothing
     end
+    ks = _branch_keys(X)
+    out_of_place && foreach(j -> _check_child_keys(ks, Ls[j], j), eachindex(Ls))
     if stop !== nothing && any(L -> L === Nothing, Ls)
         push!(nodes, stop)
         return nothing
     end
-    ks = _branch_keys(X)
-    out_of_place && foreach(j -> _check_child_keys(ks, Ls[j], j), eachindex(Ls))
     n = _children_arity(X, Tuple(Ls))
     out_of_place || foreach(j -> _check_child_keys(ks, Ls[j], j), eachindex(Ls))
     ls = Any[R <: NetworkParameters ? :(getfield($r, 1)) : r for (R, r) in zip(Rs, rs)]
