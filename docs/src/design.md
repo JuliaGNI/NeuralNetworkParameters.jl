@@ -123,8 +123,7 @@ alternating. Julia 1.13.2, `scripts/nested_walk_cost.jl map <shape>`, load avera
 | `mapparameters`, generated | 0.04 s | 0.06 s | 0.24 s |
 
 The generated map compiles faster on the two smaller sets and about as fast on the flat set, whose
-branch of 369 children both map across with `Base.map`. A later call allocates the same on both, and
-nothing below the flat set.
+branch of 369 children both map across with `Base.map`. A later call allocates the same on both.
 
 ## Two walks that take another form
 

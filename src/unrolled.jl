@@ -3,10 +3,10 @@
 #
 # Each is a generated body that reads child `i` of the branch, and of every further set, with
 # `getfield` at the literal index `i`. So every child is inferred at its own type, nothing is
-# materialised on the way in, and a walk compiles to straight-line code at any width. The maps, the
-# layout and the flattening are dispatch on the node type plus one call of a primitive; the in-place
-# walks and the folds of `walk.jl` write the whole tree in one generated body, with the key and arity
-# checks of this file. `docs/src/design.md` gives the reasons and the measurements.
+# materialised on the way in, and a walk compiles to straight-line code at any width. `mapstorage`,
+# the layout and the flattening are dispatch on the node type plus one call of a primitive;
+# `mapparameters`, the in-place walks and the folds of `walk.jl` write the whole tree in one generated
+# body, with the key and arity checks of this file. `docs/src/design.md` gives the reasons and the measurements.
 #
 # A branch is a `NamedTuple`, a `Tuple` or any struct, whose fields are its children. A further set
 # that is `nothing` gives `nothing` at each child. Two named branches pair by key, and their keys must

@@ -25,7 +25,8 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
   the rewrap of each `NetworkParameters`, a `nothing` at a leaf reaching `f`, the error at a set of
   `nothing` beside a branch, and the order in which `f` is called are as before. A key or arity
   error below the top of the tree is raised before `f` runs on any leaf, where 0.5.2 ran `f` on the
-  leaves before the branch at fault, and the key error names the argument whose keys differ, as the
+  leaves before the branch at fault; below a branch of more than 32 children or a field whose type is
+  not concrete, `f` can still run first. The key error names the argument whose keys differ, as the
   other walks do. The first call compiles in 0.04 s against 0.08 s on 0.5.2 on 3 leaves, 0.06 s
   against 0.11 s on 64 leaves of depth 4, and 0.24 s against 0.21 s on 369 leaves of depth 1: the
   median of three cold processes, Julia 1.13.2, load average about 15,

@@ -197,7 +197,8 @@ The result type is inferred, also where `f` runs another `mapparameters`, as an 
 builds its cache per leaf: the whole tree is one generated body, with one call of `f` per leaf. A
 branch of more than 32 children is the exception: it is mapped with `Base.map`, which compiles faster
 and whose result type is not inferred. A key or arity mismatch raises before `f` runs on any leaf,
-except below such a branch.
+except below such a branch or below a field whose type is not concrete, which the walk enters at run
+time.
 
 # Examples
 

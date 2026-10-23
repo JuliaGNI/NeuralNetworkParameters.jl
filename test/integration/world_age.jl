@@ -4,8 +4,9 @@
 # of `src/unrolled.jl`, whose generators call `_children_arity`, `_child_args`, `_branch_keys`,
 # `_child_expr`, `_check_child_keys` and their two error helpers. `mapparameters`, the in-place walks
 # and the folds are generated bodies of `src/walk.jl`, whose generators call `_map_body`,
-# `_foreach_body`, `_fold_body`, `_tree_nodes`, `_tree_nodes!`, `_node_name` and `_like_type` as well. A generator runs in the world age of its own
-# method definition, so a helper defined further down is invisible to it and the generator raises
+# `_foreach_body`, `_fold_body`, `_tree_nodes`, `_tree_nodes!`, `_node_name` and `_like_type` as
+# well. A generator runs in the world age of its own method definition, so a helper defined further
+# down is invisible to it and the generator raises
 # `MethodError: no method matching _children_arity(…)  The applicable method may be too new`.
 #
 # It cannot be caught in-process. Loading a precompiled package deserialises every method in the
