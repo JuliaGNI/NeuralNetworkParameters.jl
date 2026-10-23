@@ -4,6 +4,23 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The `[compat]` floor is raised to `ChainRulesCore = "1.25.1"`**, so that the floors resolve
+  and the suite passes there. With `"1"`, the Downgrade job pins ChainRulesCore 1.0.0, which the
+  `ZygoteRules = "0.2.7"` floor refuses (it needs 1.9 or later), and no environment resolves. At
+  1.9.0 the environment resolves, but only with ChainRules 1.12 and Zygote 0.6.40, which does not
+  run on Julia 1.11: the derivative tests give 106 errors inside Zygote and 2 failures. At 1.15.3
+  and 1.20.0 the resolver takes Zygote 0.6.77, and the suite passes except one assertion in
+  `Float32` and `Float64`: the sum of two Zygote gradients of `sum(p.a)` holds a `Fill`, where
+  Zygote 0.7 gives a `Vector`. Zygote 0.7 needs ChainRulesCore 1.25.1. Every testset other than
+  the derivatives passes at all three floors, 1.9.0 included. Measured with every direct
+  dependency at its floor and the test dependencies resolved against them, on Julia 1.11.9. The
+  floor of 1.25.1 itself was not measured locally, because an artifact of its environment could
+  not be downloaded; the Downgrade job runs it.
+
 ## [0.5.3] — 2026-10-23
 
 ### Fixed

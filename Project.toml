@@ -16,7 +16,7 @@ HDF5Ext = "HDF5"
 ZygoteRulesExt = "ZygoteRules"
 
 [compat]
-ChainRulesCore = "1"
+ChainRulesCore = "1.25.1"
 GeometricBase = "0.15.0"
 HDF5 = "0.17"
 ZygoteRules = "0.2.7"
