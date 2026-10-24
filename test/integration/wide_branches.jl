@@ -208,8 +208,8 @@ end
 # every width for exactly this reason.
 #
 # 48 and not 369, for the reason the nesting testset gives: nothing here depends on the width once the
-# width is past the unrolling boundary, and a wrapped 369 would cost the suite the better part of half a
-# minute on the compat floor to say what the 48 already says.
+# width is past the unrolling boundary, and a wrapped 369 would add its compilation to the suite to say
+# what the 48 already says.
 wrapped_set(k) = NetworkParameters(wide_set(k))
 
 @testset "a wide NetworkParameters round-trips and does not allocate at $k children" for k in (48,)

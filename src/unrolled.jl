@@ -16,19 +16,6 @@
 # A generator runs in the world age of its own definition, so every helper that a generator calls is
 # defined above it. `test/integration/world_age.jl` loads the sources without a cache to check this.
 
-# `f` with its first argument bound to `x`, called with every further argument: a walk binds its own
-# function, or the flat vector, and a primitive passes it the child of each set. A type for `x` is
-# kept as `Type{x}`, as `Base.Fix1` keeps it, so a walk over a type stays inferred.
-struct _FixFirst{F, X} <: Function
-    f::F
-    x::X
-    _FixFirst(f::F, x) where {F} = new{F, _type_of_bound(x)}(f, x)
-end
-@inline (g::_FixFirst)(args::Vararg{Any, N}) where {N} = g.f(g.x, args...)
-
-_type_of_bound(x) = typeof(x)
-_type_of_bound(::Type{T}) where {T} = Type{T}
-
 # The number of children of the branch type `xs`, after a check that each further set has as many.
 # `rest` holds the types of the further sets; a `Nothing` among them has no children to count.
 function _children_arity(xs, rest::Tuple)

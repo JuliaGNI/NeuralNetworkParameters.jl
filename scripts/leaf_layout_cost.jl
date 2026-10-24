@@ -19,9 +19,9 @@
 # paid for. There is nothing to interleave here — every row calls the same function — which makes the
 # hazard worse rather than better.
 #
-# The figures in the CHANGELOG were taken on Julia 1.11, which is the compat floor and was the version
-# that behaved differently before this release. Pass another with `julia +1.12` and so on; 1.11, 1.12
-# and 1.13 now agree to within a tenth of a second on the wrapped 369 row.
+# The figures in the CHANGELOG were taken on Julia 1.11, the version that behaved differently before
+# this release. Pass another with `julia +1.12` and so on; 1.11, 1.12 and 1.13 now agree to within a
+# tenth of a second on the wrapped 369 row.
 
 using NeuralNetworkParameters
 
