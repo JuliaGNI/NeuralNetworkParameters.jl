@@ -61,7 +61,7 @@ the primitives check the number first.
 **Why not a walk that recurses through its own methods.** An optimizer that steps each leaf with its
 own method runs a walk in the function of another one. A walk that recurses through its own methods
 then puts the same method on the inference stack twice, the second time with a function argument
-nested one level deeper, such as `_FixFirst{typeof(foreachparameters), Step{…}}`. Inference reads
+nested one level deeper, such as `Base.Fix1{typeof(foreachparameters), Step{…}}`. Inference reads
 that as recursion that might not end and widens the inner call, so the inner walk dispatches
 dynamically and boxes its function at every leaf. NNP 0.5.1 walks that way. With an inner walk on a
 one-leaf set of each of the 3 leaves of a set, its `foreachparameters` in `foreachparameters` and
