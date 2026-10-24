@@ -20,9 +20,8 @@ The layout and the flattening walk down the tree by dispatch on `NetworkParamete
 `NamedTuple`, `Tuple` or a leaf. They walk *across* the children of one branch with one call of a
 primitive of `src/unrolled.jl`: a map, a left fold, and a map that carries a state from child to
 child. Each primitive is a generated body that reads child `i` with `getfield` at the literal index
-`i`. A foreach is the map, called for its effect. Such a walk binds its own function with the
-internal `_FixFirst` and not with `Base.Fix1`, because a primitive passes one child of each set, and
-`Base.Fix1` takes only one further argument on Julia 1.11. The maps, the in-place walks and the
+`i`. A foreach is the map, called for its effect. Such a walk binds its own function with
+`Base.Fix1`, and a primitive passes it one child of each set. The maps, the in-place walks and the
 folds take another form, described in the next section.
 
 **Why not a `Base.tail` chain.** A chain makes a new tuple type at every level, so a branch of `k`

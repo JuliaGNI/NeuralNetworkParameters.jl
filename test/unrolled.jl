@@ -1,6 +1,6 @@
 using NeuralNetworkParameters
 using NeuralNetworkParameters: _unrolled_map, _unrolled_foreach, _unrolled_foldl,
-                               _unrolled_mapaccum, _FixFirst
+                               _unrolled_mapaccum
 using Test
 
 struct Pair2{A, B}
@@ -33,17 +33,12 @@ end
     @test ys == (T[1], T(2))
 end
 
-# The walks bind their own first argument with `_FixFirst` and pass it one child of each set, so the
-# bound function takes any number of further arguments.
-@testset "the bound first argument passes every further argument ($T)" for T in (Float32, Float64)
-    g = _FixFirst(+, T(1))
-    @test g(T(2)) === T(3)
-    @test g(T(2), T(3)) === T(6)
-    @test g(T(2), T(3), T(4)) === T(10)
+# The walks bind their own first argument with `Base.Fix1` and pass it one child of each set.
+@testset "a bound first argument is passed one child of each set ($T)" for T in (Float32, Float64)
+    g = Base.Fix1(+, T(1))
     @test @inferred(_unrolled_map(g, (T(1), T(2)), (T(3), T(4)))) === (T(5), T(7))
-    # a bound type is kept as its own type, so a walk over a type stays inferred
-    @test _FixFirst(convert, T) isa _FixFirst{typeof(convert), Type{T}}
-    @test @inferred(_unrolled_map(_FixFirst(convert, T), (1, 2.0))) === (T(1), T(2))
+    # a bound type stays inferred
+    @test @inferred(_unrolled_map(Base.Fix1(convert, T), (1, 2.0))) === (T(1), T(2))
 end
 
 @testset "the unrolled map is inferred at a width of $k" for k in (3, 48, 369)

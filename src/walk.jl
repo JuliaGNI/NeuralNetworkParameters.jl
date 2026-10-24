@@ -166,7 +166,7 @@ function _map_body(walk::Symbol, direct::Bool, @nospecialize(ps::Type),
     shape === nothing && return Expr(:block, Expr(:meta, :inline), last(nodes))
     body = Any[Expr(:meta, :inline)]
     for (k, (x, rs, leaf, _, wide)) in enumerate(nodes)
-        value = wide ? :(map(_FixFirst($walk, f), $x, $(rs...))) :
+        value = wide ? :(map(Base.Fix1($walk, f), $x, $(rs...))) :
                 direct && leaf ? :(f($x, $(rs...))) : :($walk(f, $x, $(rs...)))
         push!(body, :($(_node_name(k)) = $value))
     end

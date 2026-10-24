@@ -8,6 +8,18 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 
 ### Changed
 
+- **Julia 1.12 is the floor** (`[compat] julia = "1.12"`, from 1.11). A breaking change under
+  this package's pre-1.0 convention: a caller on Julia 1.11 can no longer install this version.
+  The walks bind their function and the flat vector with `Base.Fix1` where they used an internal
+  `_FixFirst`, which existed because `Base.Fix1` took only one further argument on 1.11 and a
+  primitive passes one child of each set; on 1.12 `Base.Fix1` passes every further argument, so
+  `_FixFirst` and its helper are deleted. The allocation bound of the flat-rule test in
+  `test/derivatives.jl` stays, since a bound that guards a reading taking in a collection is
+  honest, but its comment now states the 1.12 reading: 300 single readings of each side on macOS
+  aarch64 were identical (1 065 024 B in `Float32`, 2 113 600 B in `Float64`), where the bound
+  had been written for a reading off by up to 1 MiB on 1.11 on macOS. A reading on `x86_64` is not
+  measured.
+
 - **The `[compat]` floor is raised to `ChainRulesCore = "1.25.1"`**, the lowest that admits
   Zygote 0.7, so that the floors resolve and the derivative tests pass there. With `"1"`, the
   Downgrade job pins ChainRulesCore 1.0.0, which the `ZygoteRules = "0.2.7"` floor refuses (it

@@ -122,9 +122,9 @@ end
 
 @inline _flatten!(v, ps::NetworkParameters, l::ParametersLayout) = _flatten!(v, params(ps), l.inner)
 @inline _flatten!(v, ps::NamedTuple, l::NestedLayout) = _unrolled_foreach(
-    _FixFirst(_flatten!, v), ps, l.children)
+    Base.Fix1(_flatten!, v), ps, l.children)
 @inline _flatten!(v, ps::Tuple, l::TupleLayout) = _unrolled_foreach(
-    _FixFirst(_flatten!, v), ps, l.children)
+    Base.Fix1(_flatten!, v), ps, l.children)
 @inline _flatten!(v, x, l::WrappedLayout) = _flatten!(v, freeparameters(x), l.inner)
 
 @inline function _flatten!(v, x, l::LeafLayout)
@@ -221,9 +221,9 @@ end
 
 @inline _unflatten!(ps::NetworkParameters, l::ParametersLayout, v) = _unflatten!(params(ps), l.inner, v)
 @inline _unflatten!(ps::NamedTuple, l::NestedLayout, v) = _unrolled_foreach(
-    _FixFirst(_unflatten_from!, v), ps, l.children)
+    Base.Fix1(_unflatten_from!, v), ps, l.children)
 @inline _unflatten!(ps::Tuple, l::TupleLayout, v) = _unrolled_foreach(
-    _FixFirst(_unflatten_from!, v), ps, l.children)
+    Base.Fix1(_unflatten_from!, v), ps, l.children)
 @inline _unflatten_from!(v, x, l) = _unflatten!(x, l, v)
 @inline _unflatten!(x, l::WrappedLayout, v) = _unflatten!(freeparameters(x), l.inner, v)
 
