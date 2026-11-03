@@ -4,6 +4,30 @@ Notable changes to `NeuralNetworkParameters` are recorded here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The `[compat]` floors of the test dependencies are raised, so that the Downgrade job passes.**
+  The job resolves `Project.toml` and `test/Project.toml` together at their lower bounds, checks
+  that every dependency of both lands on its floor, and runs the tests there on Julia 1.12. No
+  package floor changes.
+  - `Zygote = "0.7.1"`, from `"0.6, 0.7"`. Zygote 0.6.35, the lowest 0.6 release that resolves,
+    gives 106 errors and 2 failures in the derivative tests on Julia 1.12 (`FieldError: type
+    Nothing has no field 'method'` in `has_chain_rrule`). Zygote 0.7.0 fails two: the gradient of `sum(p.a)` is a
+    `Fill`, where the tests expect a `Vector`. From 0.7.1 the gradient is a `Vector`.
+  - `ForwardDiff = "0.10.19, 1"`, from `"0.10, 1"`. Zygote 0.7.1 needs DiffRules 1.4 or later,
+    and ForwardDiff 0.10.18 and earlier admit DiffRules up to 1.0.2 only, so 0.10.19 is the
+    lowest ForwardDiff that resolves.
+  - `Aqua = "0.8.14"`, from `"0.8"`. Up to 0.8.13, Aqua's piracy check reads the field `mt` of
+    `Core.TypeName`, which Julia 1.12 does not have, and the check errors. Aqua 0.8.14 reads
+    `Core.methodtable` on Julia 1.12.
+  - `JET = "0.10, 0.11, 0.12, 0.13"`, a new entry. Without one, the merged resolve takes the
+    oldest JET release that the registry admits on Julia 1.12, not a release built for it. JET 0.10.0 is the first release whose own `[compat]` is `julia = "1.12"`, and
+    the 40 `report_opt` tests of `test/quality/jet.jl` pass there.
+
+  With these floors, the full `core` suite passes at the floors on Julia 1.12.7.
+
 ## [0.5.4] — 2026-10-24
 
 ### Changed
